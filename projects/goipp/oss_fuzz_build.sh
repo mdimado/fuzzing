@@ -1,15 +1,15 @@
 #!/bin/bash -eu
 
-# Set Go workspace
+# Change to the goipp source directory (already cloned in Dockerfile)
 cd $SRC/goipp
 
-# Copy your fuzz target into the goipp package if it's not already there
-# (Optional depending on your setup)
-# cp $SRC/openprinting/fuzzing/goipp/fuzz_decode_bytes.go .
-
-# Build the fuzzer
+# Install go-118-fuzz-build if not already present
 go install github.com/AdamKorcz/go-118-fuzz-build@latest
+
+# Build the fuzz target (go-fuzz compatible)
 compile_go_fuzzer github.com/OpenPrinting/goipp FuzzDecodeBytes fuzzer_goipp_decodebytes
 
-# Create the seed corpus zip
-zip -j "$OUT/fuzzer_goipp_decodebytes_seed_corpus.zip" "$SRC/openprinting/fuzzing/goipp/seeds/"*
+# Zip the seed corpus if it exists
+if [ -d "$SRC/fuzzing/projects/goipp/seeds" ]; then
+    zip -j "$OUT/fuzzer_goipp_decodebytes_seed_corpus.zip" "$SRC/fuzzing/projects/goipp/seeds/"* || echo "No seeds found"
+fi
