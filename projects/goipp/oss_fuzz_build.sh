@@ -1,19 +1,20 @@
 #!/bin/bash -eu
 
-# Change to the goipp source directory
+# Build script for OSS-Fuzz to build goipp fuzzer
+
+# Copy the fuzzer code into the goipp project
+mkdir -p $SRC/goipp/fuzzer/
+cp $SRC/fuzzing/projects/goipp/fuzzer/fuzz_decode_bytes.go $SRC/goipp/fuzzer/
+
+# Copy seeds into the project
+mkdir -p $SRC/goipp/seeds/
+cp $SRC/fuzzing/projects/goipp/seeds/* $SRC/goipp/seeds/
+
+# Navigate to project directory
 cd $SRC/goipp
 
-# Install go-118-fuzz-build
-go install github.com/AdamKorcz/go-118-fuzz-build@latest
+# Create seed corpus archive
+zip -j $OUT/fuzz_decode_bytes_seed_corpus.zip seeds/*
 
-cd $SRC/fuzzing/projects/goipp/fuzzer
-go mod init goipp-fuzz
-go get github.com/OpenPrinting/goipp
-
-# Build the fuzz target
-compile_go_fuzzer github.com/mdimado/fuzzing/projects/goipp/fuzzer FuzzDecodeBytes fuzzer_goipp_decodebytes
-
-# Zip the seed corpus (check if it exists)
-if [ -d "$SRC/fuzzing/projects/goipp/seeds" ]; then
-    zip -j "$OUT/fuzzer_goipp_decodebytes_seed_corpus.zip" "$SRC/fuzzing/projects/goipp/seeds/"* || echo "No seeds found"
-fi
+# Compile the fuzzer using Go-fuzz
+compile_go_fuzzer github.com/OpenPrinting/goipp/fuzzer FuzzDecodeBytes fuzz_decode_bytes
