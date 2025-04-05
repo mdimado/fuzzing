@@ -1,22 +1,22 @@
 #!/bin/bash -eu
 
-# Navigate to the base goipp directory
-cd $SRC/goipp
-
-# Copy the fuzzer code from your fuzzing repo to the target directory
-mkdir -p $SRC/goipp/fuzzer/
+# Copy the fuzzer code to the goipp package directory
+mkdir -p $SRC/goipp/fuzzer
 cp $SRC/fuzzing/projects/goipp/fuzzer/fuzz_decode_bytes.go $SRC/goipp/fuzzer/
 
-# Copy the seeds
-mkdir -p $SRC/goipp/seeds/
-cp $SRC/fuzzing/projects/goipp/seeds/* $SRC/goipp/seeds/ || echo "No seeds found, continuing anyway"
+# Prepare corpus directory
+mkdir -p $WORK/corpus
+cp $SRC/fuzzing/projects/goipp/seeds/* $WORK/corpus/
 
-# Create the seed corpus archive
-zip -j $OUT/fuzz_decode_bytes_seed_corpus.zip $SRC/fuzzing/projects/goipp/seeds/* || echo "Could not create seed corpus, continuing build"
+# Compress corpus into a zip file
+cd $WORK
+zip -r $OUT/fuzz_decode_bytes_seed_corpus.zip corpus/
 
-# Ensure dependencies are up to date
+# Build the fuzzer with Go114 fuzzing engine
+cd $SRC/goipp
 go mod tidy
 
-# Compile the fuzzer using the existing Go fuzzer
+# Build the fuzz target 
 compile_go_fuzzer github.com/OpenPrinting/goipp/fuzzer FuzzDecodeBytes fuzz_decode_bytes
+
 
