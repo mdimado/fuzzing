@@ -11,7 +11,7 @@ go mod init goipp-fuzz
 go get github.com/OpenPrinting/goipp
 
 # Build the fuzz target
-compile_go_fuzzer github.com/mdimado/fuzzing/goipp/fuzzer FuzzDecodeBytes fuzzer_goipp_decodebytes
+compile_go_fuzzer github.com/mdimado/fuzzing/projects/goipp/fuzzer FuzzDecodeBytes fuzzer_goipp_decodebytes
 
 # Zip the seed corpus (check if it exists)
 if [ -d "$SRC/fuzzing/projects/goipp/seeds" ]; then
