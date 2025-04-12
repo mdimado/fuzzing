@@ -16,6 +16,6 @@ cd $SRC/goipp
 go mod tidy
 
 #build fuzz target 
-compile_go_fuzzer github.com/OpenPrinting/goipp/fuzzer FuzzDecodeBytes fuzz_decode_bytes
+compile_native_go_fuzzer github.com/OpenPrinting/goipp/fuzzer FuzzDecodeBytes fuzz_decode_bytes
 
 
