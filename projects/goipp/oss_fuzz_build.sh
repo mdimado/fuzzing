@@ -1,12 +1,21 @@
 #!/bin/bash -eu
-# Inside /src/fuzzing/projects/goipp/oss_fuzz_build.sh
 
-# Copy goipp source into expected Go path
-mkdir -p $GOPATH/src/github.com/OpenPrinting/
-cp -r $SRC/goipp $GOPATH/src/github.com/OpenPrinting/
+#copy fuzzer code to goipp directory
+mkdir -p $SRC/goipp/fuzzer
+cp $SRC/fuzzing/projects/goipp/fuzzer/fuzz_decode_bytes.go $SRC/goipp/fuzzer/
 
-# Copy fuzzer into that module
-cp $SRC/fuzzing/projects/goipp/fuzz_decode_bytes.go $GOPATH/src/github.com/OpenPrinting/goipp/
+#prepare corpus directory
+mkdir -p $WORK/corpus
+cp $SRC/fuzzing/projects/goipp/seeds/* $WORK/corpus/
 
-# Compile the fuzzer
-compile_go_fuzzer github.com/OpenPrinting/goipp FuzzDecodeBytes fuzzer_goipp_decodebytes
+#compress corpus into zip file
+cd $WORK
+zip -r $OUT/fuzz_decode_bytes_seed_corpus.zip corpus/
+
+cd $SRC/goipp
+go mod tidy
+
+#build fuzz target 
+compile_go_fuzzer github.com/OpenPrinting/goipp/fuzzer FuzzDecodeBytes fuzz_decode_bytes
+
+
