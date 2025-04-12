@@ -15,6 +15,9 @@ zip -r $OUT/fuzz_decode_bytes_seed_corpus.zip corpus/
 cd $SRC/goipp
 go mod tidy
 
+go install github.com/AdamKorcz/go-118-fuzz-build@latest
+go get github.com/AdamKorcz/go-118-fuzz-build/testing
+
 #build fuzz target 
 compile_native_go_fuzzer github.com/OpenPrinting/goipp/fuzzer FuzzDecodeBytes fuzz_decode_bytes
 
