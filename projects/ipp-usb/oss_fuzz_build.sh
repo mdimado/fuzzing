@@ -15,7 +15,7 @@ cd $SRC/ipp-usb
 go mod tidy
 
 # use local ipp-usb instead of remote
-cd $SRC/fuzzing/projects/ipp-usb/fuzzer
+cd $SRC/fuzzing/projects/ipp-usb
 go mod init fuzzers.local/ippusb
 go mod tidy
 go mod edit -replace=github.com/OpenPrinting/ipp-usb=$SRC/ipp-usb
