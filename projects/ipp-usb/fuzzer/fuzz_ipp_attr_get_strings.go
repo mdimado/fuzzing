@@ -2,6 +2,15 @@
  * Fuzz target for goipp's getStrings method on IPP attributes.
  */
 
+package fuzz
+
+
+import (  
+	"bytes"
+    "testing"  
+    "github.com/OpenPrinting/ipp-usb"  
+) 
+
 func FuzzIppAttrsGetStrings(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
 		// split data into two parts: name and value
