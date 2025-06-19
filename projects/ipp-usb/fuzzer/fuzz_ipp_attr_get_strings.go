@@ -8,7 +8,7 @@ package fuzz
 import (  
 	"bytes"
     "testing"  
-    "github.com/OpenPrinting/ipp-usb"  
+    "github.com/OpenPrinting/ipp-usb/usb"  
 ) 
 
 func FuzzIppAttrsGetStrings(f *testing.F) {
