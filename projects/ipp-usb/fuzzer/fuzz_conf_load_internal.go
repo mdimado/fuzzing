@@ -1,9 +1,11 @@
-package usb
+package fuzz
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/OpenPrinting/ipp-usb/usb"
 )
 
 func FuzzConfLoadInternal(f *testing.F) {
@@ -25,18 +27,18 @@ func FuzzConfLoadInternal(f *testing.F) {
 		}
 
 		// Backup and reset config
-		origConf := Conf
-		defer func() { Conf = origConf }()
-		Conf = Configuration{
+		origConf := usb.ExportedConf
+		defer func() { usb.ExportedConf = origConf }()
+		usb.ExportedConf = usb.Configuration{
 			HTTPMinPort:        60000,
 			HTTPMaxPort:        65535,
 			DNSSdEnable:        true,
 			LoopbackOnly:       true,
 			IPV6Enable:         true,
 			ConfAuthUID:        nil,
-			LogDevice:          LogDebug,
-			LogMain:            LogDebug,
-			LogConsole:         LogDebug,
+			LogDevice:          usb.ExportedLogDebug,
+			LogMain:            usb.ExportedLogDebug,
+			LogConsole:         usb.ExportedLogDebug,
 			LogMaxFileSize:     256 * 1024,
 			LogMaxBackupFiles:  5,
 			LogAllPrinterAttrs: false,
@@ -49,6 +51,6 @@ func FuzzConfLoadInternal(f *testing.F) {
 			}
 		}()
 
-		_ = confLoadInternal(confFile)
+		_ = usb.ExportedConfLoadInternal(confFile)
 	})
 }
