@@ -8,7 +8,7 @@ cp $SRC/fuzzing/projects/ipp-usb/fuzzer/*.go $SRC/ipp-usb/fuzzer/
 # use local ipp-usb instead of remote
 cp $SRC/fuzzing/projects/ipp-usb/ipp-usb-local/go.mod $SRC/ipp-usb/go.mod
 cp $SRC/fuzzing/projects/ipp-usb/ipp-usb-local/go.sum $SRC/ipp-usb/go.sum
-cp -r $SRC/fuzzing/projects/ipp-usb/ipp-usb-local/*.go $SRC/ipp-usb/
+cp -r $SRC/fuzzing/projects/ipp-usb/ipp-usb-local/* $SRC/ipp-usb/
 cp -r $SRC/fuzzing/projects/ipp-usb/ipp-usb-local/usb $SRC/ipp-usb/
 cd $SRC/ipp-usb
 go mod edit -replace=github.com/OpenPrinting/ipp-usb=$SRC/ipp-usb
