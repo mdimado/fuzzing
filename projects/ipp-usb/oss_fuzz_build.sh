@@ -3,6 +3,8 @@
 mkdir -p $SRC/ipp-usb/fuzzer
 
 cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_ipp_sanitization.go $SRC/ipp-usb/fuzzer/
+cp $SRC/fuzzing/projects/ipp-usb/fuzzer/libusb_link.go $SRC/ipp-usb/fuzzer/
+
 
 # Prepare the seed corpus
 mkdir -p $WORK/ipp_sanitization_seed_corpus
