@@ -20,7 +20,7 @@ func FuzzIPPSanitization(f *testing.F) {
 		resp.Header.Set("Content-Type", "application/ipp")
 
 		transport := usb.NewUsbTransportForTesting()
-		transport.Log.ToNowhere()
+		transport.Log().ToNowhere()
 
 		// Testing the sanitization function
 		transport.SanitizeIppResponse(1, resp)
