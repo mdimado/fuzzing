@@ -1,10 +1,12 @@
-package usb
+package fuzzer
 
 import (
 	"bytes"
 	"io"
 	"net/http"
 	"testing"
+
+	usb "github.com/mdimado/ipp-usb-fuzzing"
 )
 
 func FuzzIPPSanitization(f *testing.F) {
@@ -17,12 +19,10 @@ func FuzzIPPSanitization(f *testing.F) {
 		}
 		resp.Header.Set("Content-Type", "application/ipp")
 
-		transport := &UsbTransport{
-			log: NewLogger(),
-		}
-		transport.log.ToNowhere()
+		transport := usb.NewUsbTransportForTesting()
+		transport.Log.ToNowhere()
 
 		// Testing the sanitization function
-		transport.sanitizeIppResponse(1, resp)
+		transport.SanitizeIppResponse(1, resp)
 	})
 }
