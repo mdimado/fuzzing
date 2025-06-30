@@ -17,8 +17,8 @@ go install github.com/AdamKorcz/go-118-fuzz-build@latest
 go get github.com/AdamKorcz/go-118-fuzz-build/testing
 
 export CGO_ENABLED=1
-export CGO_LDFLAGS="-lusb-1.0"
-export CGO_CFLAGS="-I/usr/include/libusb-1.0"
+export CGO_CFLAGS="$(pkg-config --cflags libusb-1.0)"
+export CGO_LDFLAGS="$(pkg-config --libs libusb-1.0)"
 
 # Compile fuzzers
 compile_native_go_fuzzer ./fuzzer FuzzIPPSanitization fuzz_ipp_sanitization
