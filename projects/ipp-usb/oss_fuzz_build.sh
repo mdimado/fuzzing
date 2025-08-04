@@ -6,7 +6,7 @@ cp $SRC/fuzzing/projects/ipp-usb/emulator/*.go $SRC/ipp-usb/fuzz/
 cp $SRC/fuzzing/projects/ipp-usb/fuzz_target.sh $SRC/ipp-usb/fuzz/
 
 # Set the linker flags for the CGo part of the build.
-LDFLAGS="-ldflags=-extldflags='-Wl,-Bstatic -L/src/aflplusplus/ -lafl-rt -fsanitize=address -lresolv -lpthread'"
+export CGO_LDFLAGS="-L/src/aflplusplus/ -lafl-rt -fsanitize=address"
 
 # Build emulator binary (assumes you have a main package in emulator/)
 cd $SRC/ipp-usb/fuzz
