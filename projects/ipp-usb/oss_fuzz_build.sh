@@ -1,35 +1,21 @@
-#!/bin/bash
-set -eu
+#!/bin/bash -eu
 
-echo "Building ipp-usb for AFL++ fuzzing..."
+# Copy emulator and fuzz target
+mkdir -p $SRC/ipp-usb/fuzz
+cp $SRC/fuzzing/projects/ipp-usb/emulator/*.go $SRC/ipp-usb/fuzz/
+cp $SRC/fuzzing/projects/ipp-usb/fuzz_target.sh $SRC/ipp-usb/fuzz/
 
-# Build ipp-usb with sanitizers
+# Build emulator binary (assumes you have a main package in emulator/)
+cd $SRC/ipp-usb/fuzz
+go build -o $OUT/ipp_usb_emulator emulator.go ipp_printer.go
+
+# Build ipp-usb (native Go binary)
 cd $SRC/ipp-usb
-export CGO_ENABLED=1
-export CC="$CC"
-export CXX="$CXX" 
-export CFLAGS="$CFLAGS"
-export CXXFLAGS="$CXXFLAGS"
+go build -o $OUT/ipp-usb
 
-# Build ipp-usb binary
-go build -a -ldflags '-extldflags "-static"' -o $OUT/ipp-usb ./cmd/ipp-usb
+# Copy and compile the fuzz target script
+chmod +x $SRC/ipp-usb/fuzz/fuzz_target.sh
+cp $SRC/ipp-usb/fuzz/fuzz_target.sh $OUT/fuzz_target
 
-# Build the emulator
-cd $SRC/fuzzing/projects/ipp-usb/emulator
-go build -o $OUT/ipp_usb_emulator .
-
-# Copy the fuzzing wrapper script
-cp $SRC/fuzzing/projects/ipp-usb/fuzz_ipp_usb.sh $OUT/
-chmod +x $OUT/fuzz_ipp_usb.sh
-
-# Copy testcases for AFL++
-cp -r $SRC/fuzzing/projects/ipp-usb/testcases $OUT/
-
-# Create AFL++ wrapper that reads from stdin
-cat > $OUT/fuzz_target << 'EOF'
-#!/bin/bash
-exec $OUT/fuzz_ipp_usb.sh
-EOF
+# Set executable for OSS-Fuzz
 chmod +x $OUT/fuzz_target
-
-echo "Build completed successfully"
