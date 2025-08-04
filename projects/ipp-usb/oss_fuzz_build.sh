@@ -5,6 +5,11 @@ mkdir -p $SRC/ipp-usb/fuzz
 cp $SRC/fuzzing/projects/ipp-usb/emulator/*.go $SRC/ipp-usb/fuzz/
 cp $SRC/fuzzing/projects/ipp-usb/fuzz_target.sh $SRC/ipp-usb/fuzz/
 
+# Compile AFL++ to ensure the runtime library exists.
+cd /src/aflplusplus/
+make clean
+make
+
 # Set the linker flags for the CGo part of the build.
 export CGO_LDFLAGS="-L/src/aflplusplus/ -lafl-rt -fsanitize=address"
 
