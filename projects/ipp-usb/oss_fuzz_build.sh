@@ -7,7 +7,7 @@ cp $SRC/fuzzing/projects/ipp-usb/fuzz_target.sh $SRC/ipp-usb/fuzz/
 
 # Build emulator binary (assumes you have a main package in emulator/)
 cd $SRC/ipp-usb/fuzz
-go build -o $OUT/ipp_usb_emulator emulator.go ipp_printer.go
+go build -o $OUT/ipp_usb_emulator *.go
 
 # Build ipp-usb (native Go binary)
 cd $SRC/ipp-usb
