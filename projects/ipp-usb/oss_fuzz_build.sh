@@ -29,3 +29,11 @@ chmod +x $OUT/fuzz_target.sh
 # Compile the C++ wrapper with AFL++ instrumentation
 # We'll use the AFL++-specific CXX which is set by the OSS-Fuzz build system.
 $CXX $CXXFLAGS -o $OUT/fuzz_target $SRC/fuzzing/projects/ipp-usb/fuzz_wrapper.cc
+
+
+#copy seeds
+cp -r $SRC/fuzzing/projects/ipp-usb/seeds $WORK/ipp_usb_seeds
+
+# Zip the seed corpus 
+cd $WORK
+zip -r $OUT/fuzz_target_seed_corpus.zip ipp_usb_seeds/
