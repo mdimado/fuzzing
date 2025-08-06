@@ -28,7 +28,7 @@ chmod +x $OUT/fuzz_target.sh
 
 # Compile the C++ wrapper with AFL++ instrumentation
 # We'll use the AFL++-specific CXX which is set by the OSS-Fuzz build system.
-$CXX $CXXFLAGS -o $OUT/fuzz_target $SRC/fuzzing/projects/ipp-usb/fuzz_wrapper.cc
+$CXX $CXXFLAGS $LIB_FUZZING_ENGINE -o $OUT/fuzz_target $SRC/fuzzing/projects/ipp-usb/fuzz_wrapper.cc
 
 
 #copy seeds
