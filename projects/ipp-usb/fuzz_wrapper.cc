@@ -1,29 +1,22 @@
-#include <iostream>
-#include <fstream>
-#include <vector>
-#include <unistd.h>
-#include <string>
+  #include <cstdio>
+  #include <cstdlib>
+  #include <unistd.h>
+  #include <string>
 
-int main(int argc, char **argv) {
-  if (argc < 2) {
-    std::cerr << "Usage: " << argv[0] << " <input_file>" << std::endl;
-    return 1;
+  extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+      char filename[] = "/tmp/fuzz_input_XXXXXX";
+      int fd = mkstemp(filename);
+      if (fd == -1) return 0;
+      write(fd, data, size);
+      close(fd);
+
+      std::string go_emulator_path = std::string(getenv("OUT")) + "/ipp_usb_emulator";
+      std::string go_daemon_path = std::string(getenv("OUT")) + "/ipp-usb";
+      std::string script_path = std::string(getenv("OUT")) + "/fuzz_target.sh";
+
+      // Call the script with the temp file
+      int ret = system((script_path + " " + go_emulator_path + " " + go_daemon_path + " " + filename).c_str());
+
+      unlink(filename); // Clean up
+      return 0;
   }
-
-  // The fuzzer will pass the input file path as the first argument.
-  std::string input_file = argv[1];
-
-  // Pass the input to your shell script.
-  // Note: you may need to adjust your fuzz_target.sh to accept the file path as an argument.
-  std::string go_emulator_path = std::string(getenv("OUT")) + "/ipp_usb_emulator";
-  std::string go_daemon_path = std::string(getenv("OUT")) + "/ipp-usb";
-  std::string script_path = std::string(getenv("OUT")) + "/fuzz_target.sh";
-
-  // Use execl to replace the current process with the shell script.
-  // The script can then read from the provided input file.
-  execl(script_path.c_str(), script_path.c_str(), go_emulator_path.c_str(), go_daemon_path.c_str(), input_file.c_str(), (char *)NULL);
-
-  // If execl returns, an error occurred.
-  perror("execl");
-  return 1;
-}
