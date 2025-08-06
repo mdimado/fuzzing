@@ -1,10 +1,8 @@
 #!/bin/bash
 set -e
 
-# Read fuzzing input from stdin (AFL++ provides this)
-FUZZ_INPUT=$(cat)
-FUZZ_INPUT_FILE="/tmp/afl_input_$$"
-echo -n "$FUZZ_INPUT" > "$FUZZ_INPUT_FILE"
+# Read fuzzing input from file argument
+FUZZ_INPUT_FILE="$3"
 
 # Configuration
 EMULATOR_PORT=3240
