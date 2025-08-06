@@ -12,7 +12,7 @@ TEST_TIMEOUT=5
 # Cleanup function
 cleanup() {
     kill $EMULATOR_PID $IPPUSB_PID 2>/dev/null || true
-    rm -f "$FUZZ_INPUT_FILE" /tmp/fuzz_config_$$.json /tmp/ippusb_$$.conf
+    # rm -f "$FUZZ_INPUT_FILE" /tmp/fuzz_config_$$.json /tmp/ippusb_$$.conf
 }
 trap cleanup EXIT
 
