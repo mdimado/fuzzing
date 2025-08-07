@@ -16,7 +16,7 @@ int main(int argc, char **argv) {
     FILE *fp;
 
     // Read input from stdin (AFL++ will provide this)
-    input_data = malloc(MAX_INPUT_SIZE);
+    input_data = (char *)malloc(MAX_INPUT_SIZE);
     if (!input_data) {
         return 1;
     }
