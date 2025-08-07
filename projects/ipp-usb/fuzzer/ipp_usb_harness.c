@@ -1,54 +1,43 @@
-// ipp_usb_harness.c - AFL++ harness for ipp-usb
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <stdint.h>
 
 #define MAX_INPUT_SIZE 65536
 
-int main(int argc, char **argv) {
-    char *input_data;
-    size_t input_size;
+// LibFuzzer entry point
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     char temp_file[] = "/tmp/fuzz_input_XXXXXX";
     int fd;
     FILE *fp;
 
-    // Read input from stdin (AFL++ will provide this)
-    input_data = (char *)malloc(MAX_INPUT_SIZE);
-    if (!input_data) {
-        return 1;
-    }
-
-    input_size = fread(input_data, 1, MAX_INPUT_SIZE, stdin);
-    if (input_size == 0) {
-        free(input_data);
-        return 1;
+    // Limit input size
+    if (size == 0 || size > MAX_INPUT_SIZE) {
+        return 0;
     }
 
     // Create temporary file with fuzzed data
     fd = mkstemp(temp_file);
     if (fd == -1) {
-        free(input_data);
-        return 1;
+        return 0;
     }
 
     fp = fdopen(fd, "w");
     if (!fp) {
         close(fd);
         unlink(temp_file);
-        free(input_data);
-        return 1;
+        return 0;
     }
 
-    fwrite(input_data, 1, input_size, fp);
+    fwrite(data, 1, size, fp);
     fclose(fp);
 
     // Execute the wrapper script with the temporary file
     char command[512];
     snprintf(command, sizeof(command), 
-             "%s/fuzz_ipp_usb.sh %s", 
+             "%s/fuzz_ipp_usb.sh %s 2>/dev/null", 
              getenv("FUZZER_DIR") ?: ".", 
              temp_file);
     
@@ -56,7 +45,7 @@ int main(int argc, char **argv) {
 
     // Cleanup
     unlink(temp_file);
-    free(input_data);
 
-    return WEXITSTATUS(result);
+    // Return 0 to continue fuzzing (non-zero would indicate a crash)
+    return 0;
 }
