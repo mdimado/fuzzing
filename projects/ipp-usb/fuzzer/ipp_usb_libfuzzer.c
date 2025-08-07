@@ -7,6 +7,7 @@
 #include <curl/curl.h>
 #include <signal.h>
 #include <stdint.h>
+#include <sys/wait.h>
 
 #define IPP_USB_PORT 60000  // Default ipp-usb port - adjust as needed
 
@@ -34,7 +35,7 @@ int setup_environment() {
     curl_easy_setopt(curl_handle, CURLOPT_NOPROGRESS, 1L);
     
     // Run setup script once
-    const char* fuzzer_dir = getenv("FUZZER_DIR");
+    const char* fuzzer_dir = getenv("OUT");  // OSS-Fuzz sets OUT directory
     if (!fuzzer_dir) fuzzer_dir = "/out";
     
     char setup_cmd[512];
@@ -70,9 +71,18 @@ int send_fuzzed_request(const uint8_t *data, size_t size) {
     char url[256];
     snprintf(url, sizeof(url), "http://localhost:%d/ipp/print", IPP_USB_PORT);
     
+    // Reset curl handle for reuse
+    curl_easy_reset(curl_handle);
+    
+    // Set options for this request
     curl_easy_setopt(curl_handle, CURLOPT_URL, url);
     curl_easy_setopt(curl_handle, CURLOPT_POSTFIELDS, data);
     curl_easy_setopt(curl_handle, CURLOPT_POSTFIELDSIZE, size);
+    curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 5L);
+    curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 2L);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, NULL); // Discard response
+    curl_easy_setopt(curl_handle, CURLOPT_VERBOSE, 0L);
+    curl_easy_setopt(curl_handle, CURLOPT_NOPROGRESS, 1L);
     
     struct curl_slist *headers = NULL;
     headers = curl_slist_append(headers, "Content-Type: application/ipp");
@@ -80,7 +90,10 @@ int send_fuzzed_request(const uint8_t *data, size_t size) {
     
     CURLcode res = curl_easy_perform(curl_handle);
     
-    curl_slist_free_all(headers);
+    // Clean up headers properly
+    if (headers) {
+        curl_slist_free_all(headers);
+    }
     
     // Return 0 for success, 1 for failure
     return (res == CURLE_OK) ? 0 : 1;
@@ -112,7 +125,7 @@ void LLVMFuzzerFinalize() {
     cleanup_environment();
     
     // Run cleanup script
-    const char* fuzzer_dir = getenv("FUZZER_DIR");
+    const char* fuzzer_dir = getenv("OUT");
     if (!fuzzer_dir) fuzzer_dir = "/out";
     
     char cleanup_cmd[512];
