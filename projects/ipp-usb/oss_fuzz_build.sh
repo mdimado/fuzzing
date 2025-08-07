@@ -14,17 +14,20 @@ go build -buildmode=pie -o "${OUT}/ipp-usb" .
 cd "${SRC}/fuzzing/projects/ipp-usb/simulator"
 go build -buildmode=pie -o "${OUT}/ipp-printer" ipp_printer.go USBIP.go
 
-# Build AFL++ harness for black-box fuzzing
+# Build harnesses
 cd "${SRC}/fuzzing/projects/ipp-usb/fuzzer"
 
-# Use the provided compiler (clang with fuzzing flags)
-# Build the harness with AFL++ instrumentation
-$CC $CFLAGS -fsanitize=address -fsanitize-coverage=trace-pc-guard \
-    -o "${OUT}/ipp_usb_harness" ipp_usb_harness.c
+echo "Building libFuzzer harness..."
+# Build libFuzzer version (OSS-Fuzz standard)
+$CXX $CXXFLAGS $LIB_FUZZING_ENGINE \
+    -o "${OUT}/ipp_usb_libfuzzer" ipp_usb_harness_libfuzzer.c
 
-# Also create a libFuzzer version as fallback
-$CXX $CXXFLAGS -std=c++11 \
-    -o "${OUT}/ipp_usb_libfuzzer" ipp_usb_harness.c $LIB_FUZZING_ENGINE || true
+echo "Building AFL++ harness..."
+# Build AFL++ version (without libFuzzer flags)
+# Remove fuzzer-specific flags and add AFL++ instrumentation
+CLEAN_CFLAGS=$(echo "$CFLAGS" | sed 's/-fsanitize=fuzzer[^ ]*//g' | sed 's/-fsanitize-coverage=trace-pc-guard//g')
+clang $CLEAN_CFLAGS -fsanitize=address -fsanitize-coverage=trace-pc-guard \
+    -o "${OUT}/ipp_usb_afl" ipp_usb_harness_afl.c
 
 # Copy scripts and make them executable
 cp fuzz_ipp_usb.sh "${OUT}/"
@@ -35,17 +38,32 @@ chmod +x "${OUT}"/setup_environment.sh
 chmod +x "${OUT}"/cleanup.sh
 
 # Set environment variable for scripts to find each other
-echo "export FUZZER_DIR=\"${OUT}\"" >> "${OUT}/fuzz_env.sh"
+echo "export FUZZER_DIR=\"${OUT}\"" > "${OUT}/fuzz_env.sh"
 echo "export IPP_USB_BIN=\"${OUT}/ipp-usb\"" >> "${OUT}/fuzz_env.sh"
 echo "export SIMULATOR_BIN=\"${OUT}/ipp-printer\"" >> "${OUT}/fuzz_env.sh"
 
 # Copy seed corpus
+mkdir -p "${OUT}/ipp_usb_seed_corpus"
 if [ -d "${SRC}/fuzzing/projects/ipp-usb/seeds" ]; then
-    cp -r "${SRC}/fuzzing/projects/ipp-usb/seeds"/* "${OUT}/" || true
+    cp -r "${SRC}/fuzzing/projects/ipp-usb/seeds"/* "${OUT}/ipp_usb_seed_corpus/" || true
 fi
 
-# Create a simple runner script for OSS-Fuzz
+# Create OSS-Fuzz compatible runner (uses libFuzzer by default)
 cat > "${OUT}/run_fuzzer.sh" << 'EOF'
+#!/bin/bash
+source "${OUT}/fuzz_env.sh"
+
+# Setup environment
+"${OUT}/setup_environment.sh"
+
+# Run libFuzzer (OSS-Fuzz standard)
+"${OUT}/ipp_usb_libfuzzer" "${OUT}/ipp_usb_seed_corpus" -max_total_time=3600
+EOF
+
+chmod +x "${OUT}/run_fuzzer.sh"
+
+# Create AFL++ runner script as alternative
+cat > "${OUT}/run_afl.sh" << 'EOF'
 #!/bin/bash
 source "${OUT}/fuzz_env.sh"
 export AFL_SKIP_CPUFREQ=1
@@ -58,9 +76,10 @@ export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
 afl-fuzz -i "${OUT}/ipp_usb_seed_corpus" \
          -o findings \
          -t 10000 \
-         -- "${OUT}/ipp_usb_harness"
+         -- "${OUT}/ipp_usb_afl"
 EOF
 
-chmod +x "${OUT}/run_fuzzer.sh"
+chmod +x "${OUT}/run_afl.sh"
 
 echo "ipp-usb fuzzer build complete!"
+echo "Built both libFuzzer (${OUT}/ipp_usb_libfuzzer) and AFL++ (${OUT}/ipp_usb_afl) versions"
