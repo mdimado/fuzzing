@@ -1,30 +1,65 @@
-#!/bin/bash
+#!/bin/bash -eu
 
 # oss_fuzz_build.sh for ipp-usb
 
 set -e
 
-# Build ipp-usb from source
+echo "Building ipp-usb fuzzer..."
+
+# Build ipp-usb from source (main.go is in the root directory)
 cd "${SRC}/ipp-usb"
-go build -o "${OUT}/ipp-usb" ./cmd/ipp-usb
+go build -buildmode=pie -o "${OUT}/ipp-usb" .
 
 # Build the IPP over USB simulator
-cd "${SRC}/openprinting-fuzzing/projects/ipp-usb/simulator"
-go build -o "${OUT}/ipp-printer" ipp_printer.go USBIP.go
+cd "${SRC}/fuzzing/projects/ipp-usb/simulator"
+go build -buildmode=pie -o "${OUT}/ipp-printer" ipp_printer.go USBIP.go
 
-# Build the AFL++ harness
-cd "${SRC}/openprinting-fuzzing/projects/ipp-usb/fuzzer"
-$CC $CFLAGS -o "${OUT}/ipp_usb_harness" ipp_usb_harness.c $LIB_FUZZING_ENGINE
+# Build harnesses for different fuzzing engines
+cd "${SRC}/fuzzing/projects/ipp-usb/fuzzer"
 
-# Copy scripts and configuration
+# Build LibFuzzer harness (primary for OSS-Fuzz)
+$CXX $CXXFLAGS -std=c++11 -lcurl \
+    -o "${OUT}/ipp_usb_libfuzzer" ipp_usb_libfuzzer.c $LIB_FUZZING_ENGINE
+
+# Build AFL++ harness as alternative
+$CC $CFLAGS -lcurl \
+    -o "${OUT}/ipp_usb_afl" ipp_usb_afl.c || true
+
+# Copy scripts and make them executable
 cp fuzz_ipp_usb.sh "${OUT}/"
 cp setup_environment.sh "${OUT}/"
 cp cleanup.sh "${OUT}/"
-
-# Copy seed corpus
-cp -r ../seeds/* "${OUT}/"
-
-# Make scripts executable
 chmod +x "${OUT}"/fuzz_ipp_usb.sh
 chmod +x "${OUT}"/setup_environment.sh
 chmod +x "${OUT}"/cleanup.sh
+
+# Set environment variable for scripts to find each other
+echo "export FUZZER_DIR=\"${OUT}\"" >> "${OUT}/fuzz_env.sh"
+echo "export IPP_USB_BIN=\"${OUT}/ipp-usb\"" >> "${OUT}/fuzz_env.sh"
+echo "export SIMULATOR_BIN=\"${OUT}/ipp-printer\"" >> "${OUT}/fuzz_env.sh"
+
+# Copy seed corpus
+if [ -d "${SRC}/fuzzing/projects/ipp-usb/seeds" ]; then
+    cp -r "${SRC}/fuzzing/projects/ipp-usb/seeds"/* "${OUT}/" || true
+fi
+
+# Create a simple runner script for OSS-Fuzz
+cat > "${OUT}/run_fuzzer.sh" << 'EOF'
+#!/bin/bash
+source "${OUT}/fuzz_env.sh"
+export AFL_SKIP_CPUFREQ=1
+export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
+
+# Setup environment
+"${OUT}/setup_environment.sh"
+
+# Run AFL++ fuzzer
+afl-fuzz -i "${OUT}/ipp_usb_seed_corpus" \
+         -o findings \
+         -t 10000 \
+         -- "${OUT}/ipp_usb_harness"
+EOF
+
+chmod +x "${OUT}/run_fuzzer.sh"
+
+echo "ipp-usb fuzzer build complete!"
