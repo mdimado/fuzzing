@@ -22,9 +22,11 @@ cd "${SRC}/fuzzing/projects/ipp-usb/fuzzer"
 $CC $CFLAGS -lcurl \
     -o "${OUT}/ipp_usb_libfuzzer" ipp_usb_libfuzzer.c $LIB_FUZZING_ENGINE
 
-# Build AFL++ harness as alternative
-$CC $CFLAGS -lcurl \
-    -o "${OUT}/ipp_usb_afl" ipp_usb_afl.c || true
+# Build AFL++ harness as alternative (optional - ignore errors)
+if [ -f "ipp_usb_afl.c" ]; then
+    $CC $CFLAGS -lcurl \
+        -o "${OUT}/ipp_usb_afl" ipp_usb_afl.c 2>/dev/null || echo "AFL++ harness build skipped"
+fi
 
 # Copy scripts and make them executable
 cp fuzz_ipp_usb.sh "${OUT}/"
