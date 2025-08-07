@@ -23,18 +23,16 @@ import (
 
 // Config holds settings used to initialize the virtual IPP-over-USB device.
 type Config struct {
-	IPPServerURL  string `json:"ipp_server_url"`
-	DeviceName    string `json:"device_name"`
-	VendorID      string `json:"vendor_id"`
-	ProductID     string `json:"product_id"`
-	Manufacturer  string `json:"manufacturer"`
-	Product       string `json:"product"`
-	Serial        string `json:"serial"`
-	ListenIP      string `json:"listen_ip"`
-	ListenPort    int    `json:"listen_port"`
-	Debug         bool   `json:"debug"`
-	FuzzMode      string `json:"fuzz_mode"` // "usb_descriptor", "usbip_packet", "ipp_data", "http_request"
-	FuzzInputFile string `json:"fuzz_input_file"`
+	IPPServerURL string `json:"ipp_server_url"`
+	DeviceName   string `json:"device_name"`
+	VendorID     string `json:"vendor_id"`
+	ProductID    string `json:"product_id"`
+	Manufacturer string `json:"manufacturer"`
+	Product      string `json:"product"`
+	Serial       string `json:"serial"`
+	ListenIP     string `json:"listen_ip"`
+	ListenPort   int    `json:"listen_port"`
+	Debug        bool   `json:"debug"`
 }
 
 // IPPOverUSBDevice simulates a USB printer that forwards data to an IPP server.
@@ -53,103 +51,9 @@ type IPPOverUSBDevice struct {
 	pendingResponse  []byte
 }
 
-func (d *IPPOverUSBDevice) handleFuzzMode() {
-	if d.config.FuzzMode == "" {
-		return // Normal operation
-	}
-
-	fuzzInputFile := d.config.FuzzInputFile
-	if fuzzInputFile == "" {
-		return
-	}
-
-	fuzzData, err := ioutil.ReadFile(fuzzInputFile)
-	if err != nil {
-		if d.config.Debug {
-			fmt.Printf("Could not read fuzz input file: %v\n", err)
-		}
-		return
-	}
-
-	if d.config.Debug {
-		fmt.Printf("Applying fuzz mode: %s with %d bytes\n", d.config.FuzzMode, len(fuzzData))
-	}
-
-	switch d.config.FuzzMode {
-	case "usb_descriptor":
-		d.injectFuzzedDescriptor(fuzzData)
-	case "usbip_packet":
-		d.injectFuzzedUSBIPPacket(fuzzData)
-	case "ipp_data":
-		d.injectFuzzedIPPResponse(fuzzData)
-	case "http_request":
-		d.injectFuzzedHTTPResponse(fuzzData)
-	}
-}
-
-func (d *IPPOverUSBDevice) injectFuzzedDescriptor(data []byte) {
-	// Use fuzzed data to corrupt USB descriptors
-	if len(data) == 0 {
-		return
-	}
-
-	// Corrupt device descriptor with fuzzed data
-	if len(data) >= 2 {
-		// Fuzz vendor ID
-		d.vendorID = uint16(data[0]) | (uint16(data[1]) << 8)
-	}
-	if len(data) >= 4 {
-		// Fuzz product ID
-		d.productID = uint16(data[2]) | (uint16(data[3]) << 8)
-	}
-	if len(data) >= 18 {
-		// Completely replace device descriptor with fuzzed data
-		d.deviceDescriptor = DeviceDescriptor{
-			BLength:            data[0],
-			BDescriptorType:    data[1],
-			BcdUSB:             uint16(data[2]) | (uint16(data[3]) << 8),
-			BDeviceClass:       data[4],
-			BDeviceSubClass:    data[5],
-			BDeviceProtocol:    data[6],
-			BMaxPacketSize0:    data[7],
-			IDVendor:           uint16(data[8]) | (uint16(data[9]) << 8),
-			IDProduct:          uint16(data[10]) | (uint16(data[11]) << 8),
-			BcdDevice:          uint16(data[12]) | (uint16(data[13]) << 8),
-			IManufacturer:      data[14],
-			IProduct:           data[15],
-			ISerialNumber:      data[16],
-			BNumConfigurations: data[17],
-		}
-	}
-}
-
-func (d *IPPOverUSBDevice) injectFuzzedUSBIPPacket(data []byte) {
-	// Inject malformed USB/IP packets when handling requests
-	if len(data) > 0 {
-		// Store fuzzed data to be sent as USB response
-		d.pendingResponse = make([]byte, len(data))
-		copy(d.pendingResponse, data)
-	}
-}
-
-func (d *IPPOverUSBDevice) injectFuzzedIPPResponse(data []byte) {
-	// Use fuzzed data as IPP response
-	if len(data) > 0 {
-		d.pendingResponse = make([]byte, len(data))
-		copy(d.pendingResponse, data)
-	}
-}
-
-func (d *IPPOverUSBDevice) injectFuzzedHTTPResponse(data []byte) {
-	// Use fuzzed data as HTTP response that will be forwarded
-	if len(data) > 0 {
-		d.pendingResponse = make([]byte, len(data))
-		copy(d.pendingResponse, data)
-	}
-}
-
 // NewIPPOverUSBDevice creates a new IPP-over-USB device from the given config file.
 func NewIPPOverUSBDevice(configFile string) (*IPPOverUSBDevice, error) {
+
 	device := &IPPOverUSBDevice{}
 
 	config, err := device.loadConfig(configFile)
@@ -177,9 +81,6 @@ func NewIPPOverUSBDevice(configFile string) (*IPPOverUSBDevice, error) {
 	device.deviceDescriptor = device.createDeviceDescriptor()
 	device.configurations = device.createConfigurations()
 
-	// Apply fuzzing modifications AFTER creating descriptors
-	device.handleFuzzMode()
-
 	device.GenerateRawConfiguration(device)
 
 	fmt.Printf("IPP over USB Proxy Device\n")
@@ -187,10 +88,6 @@ func NewIPPOverUSBDevice(configFile string) (*IPPOverUSBDevice, error) {
 	fmt.Printf("IPP Server URL: %s\n", device.serverURL)
 	fmt.Printf("Device: %s\n", device.deviceName)
 	fmt.Printf("Vendor ID: 0x%04X, Product ID: 0x%04X\n", device.vendorID, device.productID)
-
-	if config.FuzzMode != "" {
-		fmt.Printf("Fuzz Mode: %s\n", config.FuzzMode)
-	}
 
 	return device, nil
 }
