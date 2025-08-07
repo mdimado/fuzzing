@@ -6,9 +6,9 @@ set -e
 
 echo "Building ipp-usb fuzzer..."
 
-# Build ipp-usb from source
+# Build ipp-usb from source (main.go is in the root directory)
 cd "${SRC}/ipp-usb"
-go build -buildmode=pie -o "${OUT}/ipp-usb" ./cmd/ipp-usb
+go build -buildmode=pie -o "${OUT}/ipp-usb" .
 
 # Build the IPP over USB simulator
 cd "${SRC}/fuzzing/projects/ipp-usb/simulator"
@@ -17,10 +17,7 @@ go build -buildmode=pie -o "${OUT}/ipp-printer" ipp_printer.go USBIP.go
 # Build AFL++ harness for black-box fuzzing
 cd "${SRC}/fuzzing/projects/ipp-usb/fuzzer"
 
-# Use AFL++ compiler for the harness
-export CC=afl-clang-fast
-export CXX=afl-clang-fast++
-
+# Use the provided compiler (clang with fuzzing flags)
 # Build the harness with AFL++ instrumentation
 $CC $CFLAGS -fsanitize=address -fsanitize-coverage=trace-pc-guard \
     -o "${OUT}/ipp_usb_harness" ipp_usb_harness.c
