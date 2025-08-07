@@ -1,3 +1,5 @@
+// ipp_usb_harness_libfuzzer.c - LibFuzzer harness for ipp-usb
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -7,7 +9,7 @@
 
 #define MAX_INPUT_SIZE 65536
 
-// LibFuzzer entry point
+// LibFuzzer entry point - THIS IS REQUIRED FOR LIBFUZZER
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     char temp_file[] = "/tmp/fuzz_input_XXXXXX";
     int fd;
@@ -24,7 +26,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         return 0;
     }
 
-    fp = fdopen(fd, "w");
+    fp = fdopen(fd, "wb");
     if (!fp) {
         close(fd);
         unlink(temp_file);
@@ -46,6 +48,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     // Cleanup
     unlink(temp_file);
 
-    // Return 0 to continue fuzzing (non-zero would indicate a crash)
+    // Return 0 to continue fuzzing
     return 0;
 }

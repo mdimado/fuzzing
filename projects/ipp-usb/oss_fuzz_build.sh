@@ -19,7 +19,7 @@ cd "${SRC}/fuzzing/projects/ipp-usb/fuzzer"
 
 echo "Building libFuzzer harness..."
 # Build libFuzzer version (OSS-Fuzz standard)
-$CXX $CXXFLAGS $LIB_FUZZING_ENGINE \
+$CC $CFLAGS $LIB_FUZZING_ENGINE \
     -o "${OUT}/ipp_usb_libfuzzer" ipp_usb_harness_libfuzzer.c
 
 echo "Building AFL++ harness..."
