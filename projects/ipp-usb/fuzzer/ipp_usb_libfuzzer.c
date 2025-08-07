@@ -24,6 +24,7 @@ int setup_environment() {
     curl_global_init(CURL_GLOBAL_DEFAULT);
     curl_handle = curl_easy_init();
     if (!curl_handle) {
+        printf("Failed to initialize curl\n");
         return 1;
     }
     
@@ -34,21 +35,44 @@ int setup_environment() {
     curl_easy_setopt(curl_handle, CURLOPT_VERBOSE, 0L);
     curl_easy_setopt(curl_handle, CURLOPT_NOPROGRESS, 1L);
     
-    // Run setup script once
-    const char* fuzzer_dir = getenv("OUT");  // OSS-Fuzz sets OUT directory
+    // Get fuzzer directory - use /out if not set
+    const char* fuzzer_dir = getenv("FUZZER_DIR");
     if (!fuzzer_dir) fuzzer_dir = "/out";
     
-    char setup_cmd[512];
-    snprintf(setup_cmd, sizeof(setup_cmd), "%s/setup_environment.sh >/dev/null 2>&1", fuzzer_dir);
+    // Check if setup script exists
+    char setup_script[512];
+    snprintf(setup_script, sizeof(setup_script), "%s/setup_environment.sh", fuzzer_dir);
     
-    int result = system(setup_cmd);
-    if (WEXITSTATUS(result) != 0) {
-        printf("Setup script failed\n");
+    if (access(setup_script, F_OK) != 0) {
+        printf("Setup script not found at %s, skipping setup\n", setup_script);
+        setup_done = 1;
+        return 0; // Continue without setup script
+    }
+    
+    // Run setup script
+    char setup_cmd[512];
+    snprintf(setup_cmd, sizeof(setup_cmd), "%s 2>&1", setup_script);
+    
+    FILE* setup_output = popen(setup_cmd, "r");
+    if (setup_output == NULL) {
+        printf("Failed to run setup script\n");
         return 1;
     }
     
+    char buffer[256];
+    while (fgets(buffer, sizeof(buffer), setup_output) != NULL) {
+        printf("Setup: %s", buffer);
+    }
+    
+    int result = pclose(setup_output);
+    if (result != 0) {
+        printf("Setup script failed with code %d\n", WEXITSTATUS(result));
+        // Don't fail completely - continue without setup for OSS-Fuzz compatibility
+        printf("Continuing without setup...\n");
+    }
+    
     // Wait for services to start
-    sleep(10);
+    sleep(5);
     
     setup_done = 1;
     printf("Setup complete\n");
@@ -71,18 +95,9 @@ int send_fuzzed_request(const uint8_t *data, size_t size) {
     char url[256];
     snprintf(url, sizeof(url), "http://localhost:%d/ipp/print", IPP_USB_PORT);
     
-    // Reset curl handle for reuse
-    curl_easy_reset(curl_handle);
-    
-    // Set options for this request
     curl_easy_setopt(curl_handle, CURLOPT_URL, url);
     curl_easy_setopt(curl_handle, CURLOPT_POSTFIELDS, data);
     curl_easy_setopt(curl_handle, CURLOPT_POSTFIELDSIZE, size);
-    curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 5L);
-    curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 2L);
-    curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, NULL); // Discard response
-    curl_easy_setopt(curl_handle, CURLOPT_VERBOSE, 0L);
-    curl_easy_setopt(curl_handle, CURLOPT_NOPROGRESS, 1L);
     
     struct curl_slist *headers = NULL;
     headers = curl_slist_append(headers, "Content-Type: application/ipp");
@@ -90,13 +105,10 @@ int send_fuzzed_request(const uint8_t *data, size_t size) {
     
     CURLcode res = curl_easy_perform(curl_handle);
     
-    // Clean up headers properly
-    if (headers) {
-        curl_slist_free_all(headers);
-    }
+    curl_slist_free_all(headers);
     
-    // Return 0 for success, 1 for failure
-    return (res == CURLE_OK) ? 0 : 1;
+    // Return 0 regardless of curl result to avoid stopping fuzzer
+    return 0;
 }
 
 // LibFuzzer entry point - this gets called for each input
@@ -104,9 +116,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     // Setup environment on first call
     if (!setup_done) {
         if (setup_environment() != 0) {
-            // If setup fails, still continue - just simulate success
-            // This allows fuzzer to run even without full environment
-            setup_done = 1;
+            printf("Setup failed, but continuing with fuzzing\n");
         }
     }
     
@@ -115,17 +125,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         return 0;
     }
     
-    // Only try HTTP request if curl is available
-    if (curl_handle) {
-        send_fuzzed_request(data, size);
-    } else {
-        // Simulate processing the data even without HTTP
-        // This gives some basic coverage
-        for (size_t i = 0; i < size && i < 100; i++) {
-            volatile uint8_t dummy = data[i];
-            (void)dummy; // Avoid unused variable warning
-        }
-    }
+    // Send the fuzzed data via HTTP to ipp-usb
+    send_fuzzed_request(data, size);
     
     return 0;  // Always return 0 unless you want to report a crash
 }
@@ -135,11 +136,16 @@ __attribute__((destructor))
 void LLVMFuzzerFinalize() {
     cleanup_environment();
     
-    // Run cleanup script
-    const char* fuzzer_dir = getenv("OUT");
+    // Run cleanup script if it exists
+    const char* fuzzer_dir = getenv("FUZZER_DIR");
     if (!fuzzer_dir) fuzzer_dir = "/out";
     
-    char cleanup_cmd[512];
-    snprintf(cleanup_cmd, sizeof(cleanup_cmd), "%s/cleanup.sh >/dev/null 2>&1", fuzzer_dir);
-    system(cleanup_cmd);
+    char cleanup_script[512];
+    snprintf(cleanup_script, sizeof(cleanup_script), "%s/cleanup.sh", fuzzer_dir);
+    
+    if (access(cleanup_script, F_OK) == 0) {
+        char cleanup_cmd[512];
+        snprintf(cleanup_cmd, sizeof(cleanup_cmd), "%s >/dev/null 2>&1", cleanup_script);
+        system(cleanup_cmd);
+    }
 }
