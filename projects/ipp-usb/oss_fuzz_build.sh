@@ -18,7 +18,8 @@ go build -buildmode=pie -o "${OUT}/ipp-printer" ipp_printer.go USBIP.go
 cd "${SRC}/fuzzing/projects/ipp-usb/fuzzer"
 
 # Build LibFuzzer harness (primary for OSS-Fuzz)
-$CXX $CXXFLAGS -std=c++11 -lcurl \
+# Use C compiler for .c files, not C++
+$CC $CFLAGS -lcurl \
     -o "${OUT}/ipp_usb_libfuzzer" ipp_usb_libfuzzer.c $LIB_FUZZING_ENGINE
 
 # Build AFL++ harness as alternative
