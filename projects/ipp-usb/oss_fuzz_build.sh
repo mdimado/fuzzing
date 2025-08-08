@@ -6,68 +6,71 @@ set -e
 
 echo "Building ipp-usb fuzzer with static dependencies..."
 
+# Install additional static libraries that might be missing
+apt-get update && apt-get install -y libudev-dev || true
+
 # Set Go build flags for static linking
 export CGO_ENABLED=1
-export CGO_CFLAGS="$CFLAGS"
-export CGO_LDFLAGS="$CFLAGS"
 
-# Find static libraries
-AVAHI_COMMON_STATIC=$(find /usr/lib -name "libavahi-common.a" 2>/dev/null | head -1)
-AVAHI_CLIENT_STATIC=$(find /usr/lib -name "libavahi-client.a" 2>/dev/null | head -1)
-USB_STATIC=$(find /usr/lib -name "libusb-1.0.a" 2>/dev/null | head -1)
-
-echo "Found static libraries:"
-echo "  Avahi Common: $AVAHI_COMMON_STATIC"
-echo "  Avahi Client: $AVAHI_CLIENT_STATIC"
-echo "  USB: $USB_STATIC"
-
-# Set up pkg-config to prefer static libraries
-export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig"
-export PKG_CONFIG="pkg-config --static"
-
-# Build ipp-usb with static linking
+# Build ipp-usb with mixed static/dynamic linking (safer approach)
 cd "${SRC}/ipp-usb"
 
-# Create a custom build script that forces static linking
-cat > build_static.sh << 'EOF'
-#!/bin/bash
-set -e
+# Check what static libraries are actually available
+echo "Checking available static libraries:"
+find /usr/lib -name "libavahi*.a" 2>/dev/null || echo "No avahi static libs"
+find /usr/lib -name "libusb*.a" 2>/dev/null || echo "No USB static libs"  
+find /usr/lib -name "libudev*.a" 2>/dev/null || echo "No udev static libs"
 
-# Get pkg-config flags for static linking
-AVAHI_CFLAGS=$(pkg-config --cflags --static avahi-client avahi-common 2>/dev/null || echo "")
-AVAHI_LIBS=$(pkg-config --libs --static avahi-client avahi-common 2>/dev/null || echo "-lavahi-client -lavahi-common")
-USB_CFLAGS=$(pkg-config --cflags --static libusb-1.0 2>/dev/null || echo "")
-USB_LIBS=$(pkg-config --libs --static libusb-1.0 2>/dev/null || echo "-lusb-1.0")
+# Try a more conservative approach - avoid full static linking
+# Instead, bundle dependencies that are available as static libraries
+export CGO_CFLAGS="$CFLAGS $(pkg-config --cflags libusb-1.0 avahi-client avahi-common 2>/dev/null || echo '-I/usr/include/libusb-1.0')"
 
-# Combine all flags
-export CGO_CFLAGS="$CGO_CFLAGS $AVAHI_CFLAGS $USB_CFLAGS"
-export CGO_LDFLAGS="$CGO_LDFLAGS $AVAHI_LIBS $USB_LIBS -static-libgcc"
+# For CGO_LDFLAGS, only use libraries that we know have static versions available
+# Avoid udev which doesn't have static libraries in most distributions
+CGO_LIBS=""
+
+# Add avahi libraries if static versions exist
+if [ -f "/usr/lib/x86_64-linux-gnu/libavahi-common.a" ]; then
+    CGO_LIBS="$CGO_LIBS /usr/lib/x86_64-linux-gnu/libavahi-common.a"
+else
+    CGO_LIBS="$CGO_LIBS -lavahi-common"
+fi
+
+if [ -f "/usr/lib/x86_64-linux-gnu/libavahi-client.a" ]; then
+    CGO_LIBS="$CGO_LIBS /usr/lib/x86_64-linux-gnu/libavahi-client.a"  
+else
+    CGO_LIBS="$CGO_LIBS -lavahi-client"
+fi
+
+# Add USB library
+if [ -f "/usr/lib/x86_64-linux-gnu/libusb-1.0.a" ]; then
+    CGO_LIBS="$CGO_LIBS /usr/lib/x86_64-linux-gnu/libusb-1.0.a"
+else
+    CGO_LIBS="$CGO_LIBS -lusb-1.0"
+fi
+
+# Add system libraries that should be dynamically linked
+CGO_LIBS="$CGO_LIBS -ludev -pthread -ldbus-1"
+
+export CGO_LDFLAGS="$CFLAGS $CGO_LIBS"
 
 echo "CGO_CFLAGS: $CGO_CFLAGS"
 echo "CGO_LDFLAGS: $CGO_LDFLAGS"
 
-# Build with static linking
-go build -buildmode=pie -ldflags="-linkmode external -extldflags '-static'" -o "${OUT}/ipp-usb" .
-EOF
-
-chmod +x build_static.sh
-./build_static.sh
+# Build without forcing full static linking (this was causing the udev issue)
+go build -buildmode=pie -o "${OUT}/ipp-usb" .
 
 # Build the IPP over USB simulator (this shouldn't need avahi)
 cd "${SRC}/fuzzing/projects/ipp-usb/simulator"
 go build -buildmode=pie -ldflags="-linkmode external -extldflags '-static'" -o "${OUT}/ipp-printer" ipp_printer.go USBIP.go
 
-# Build LibFuzzer harness with static curl
+# Build LibFuzzer harness 
 cd "${SRC}/fuzzing/projects/ipp-usb/fuzzer"
 
-# Get curl static linking flags
-CURL_CFLAGS=$(pkg-config --cflags --static libcurl 2>/dev/null || echo "")
-CURL_LIBS=$(pkg-config --libs --static libcurl 2>/dev/null || echo "-lcurl -lssl -lcrypto -lz")
-
-echo "Building libfuzzer harness with static linking..."
-$CC $CFLAGS $CURL_CFLAGS \
+echo "Building libfuzzer harness..."
+$CC $CFLAGS \
     -o "${OUT}/ipp_usb_libfuzzer" ipp_usb_libfuzzer.c \
-    $LIB_FUZZING_ENGINE $CURL_LIBS
+    $LIB_FUZZING_ENGINE -lcurl
 
 # Copy scripts and make them executable
 cp fuzz_ipp_usb.sh "${OUT}/"
@@ -92,8 +95,12 @@ fi
 
 echo "ipp-usb fuzzer build complete!"
 
-# Verify static linking
+# Verify linking - check dependencies but don't fail if ldd shows dependencies
 echo "Checking ipp-usb dependencies:"
-ldd "${OUT}/ipp-usb" || echo "Static binary (good!)"
-echo "Checking libfuzzer harness dependencies:"
-ldd "${OUT}/ipp_usb_libfuzzer" || echo "Static binary (good!)"
+ldd "${OUT}/ipp-usb" 2>&1 || echo "ldd check completed"
+echo "Checking libfuzzer harness dependencies:" 
+ldd "${OUT}/ipp_usb_libfuzzer" 2>&1 || echo "ldd check completed"
+
+# Test if binaries can run
+echo "Testing ipp-usb binary:"
+"${OUT}/ipp-usb" --help 2>&1 || echo "ipp-usb help test completed"
