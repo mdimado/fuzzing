@@ -1,26 +1,32 @@
 #!/bin/bash -eu
 
-apt-get update && apt-get install -y \
-    libusb-1.0-0-dev \
-    libavahi-client-dev \
-    libavahi-common-dev \
-    pkg-config
+# OSS-Fuzz build script for ipp-usb
+cd $SRC/fuzzing/projects/ipp-usb
 
-cd $SRC/ipp-usb
-make clean
-export CGO_ENABLED=1
-export CGO_LDFLAGS="-static"
-go build -ldflags "-extldflags '-static'" -o $OUT/ipp-usb
+echo "Building ipp-usb fuzzers..."
 
-cd $SRC/go-mfp
-export CC=$SRC/go-mfp/build/bin/clang
-export CXX=$SRC/go-mfp/build/bin/clang++
-export CFLAGS="$CFLAGS -fsanitize=fuzzer-no-link"
-export CXXFLAGS="$CXXFLAGS -fsanitize=fuzzer-no-link"
-make
-cp mfp-proxy $OUT/
+# Build the main HTTP fuzzer
+go-fuzz-build -libfuzzer -func FuzzHTTPInterface -o fuzz_ipp_usb_http.a ./fuzzer
+$CXX $CXXFLAGS $LIB_FUZZING_ENGINE fuzz_ipp_usb_http.a -o $OUT/fuzz_ipp_usb_http
 
-cd $SRC/fuzzing/projects/ipp-usb/fuzzer
-compile_go_fuzzer . Fuzz fuzz_ipp_usb_http
+# Build the IPP message fuzzer
+go-fuzz-build -libfuzzer -func FuzzIPPMessage -o fuzz_ipp_usb_message.a ./fuzzer  
+$CXX $CXXFLAGS $LIB_FUZZING_ENGINE fuzz_ipp_usb_message.a -o $OUT/fuzz_ipp_usb_message
 
-cp -r $SRC/fuzzing/projects/ipp-usb/seeds/* $OUT/
+# Build the USB descriptor fuzzer
+go-fuzz-build -libfuzzer -func FuzzUSBDescriptor -o fuzz_ipp_usb_descriptor.a ./fuzzer
+$CXX $CXXFLAGS $LIB_FUZZING_ENGINE fuzz_ipp_usb_descriptor.a -o $OUT/fuzz_ipp_usb_descriptor
+
+# Copy seed corpora
+echo "Copying seed corpora..."
+cp -r seeds/fuzz_ipp_usb_http_seed_corpus $OUT/
+cp -r seeds/fuzz_ipp_usb_message_seed_corpus $OUT/
+cp -r seeds/fuzz_ipp_usb_descriptor_seed_corpus $OUT/
+
+# Copy auxiliary files
+echo "Copying auxiliary files..."
+cp setup_environment.sh $OUT/
+cp cleanup.sh $OUT/
+chmod +x $OUT/setup_environment.sh $OUT/cleanup.sh
+
+echo "ipp-usb fuzzers built successfully"
