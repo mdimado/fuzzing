@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"testing"
 	"time"
 )
 
@@ -21,96 +22,113 @@ var (
 )
 
 // FuzzHTTPInterface fuzzes ipp-usb through HTTP interface
-func FuzzHTTPInterface(data []byte) int {
-	if len(data) < 10 {
-		return 0
-	}
+func FuzzHTTPInterface(f *testing.F) {
+	// Add seed inputs
+	f.Add([]byte("POST /ipp/print HTTP/1.1\r\nContent-Type: application/ipp\r\n\r\n"))
+	f.Add([]byte("\x01\x01\x00\x0B\x00\x00\x00\x01\x01G\x00\x12attributes-charset\x00\x05utf-8"))
 
-	// Ensure daemon is running
-	if !ensureDaemonRunning() {
-		return 0
-	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) < 10 {
+			return
+		}
 
-	// Try to send HTTP request to ipp-usb
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+		// Ensure daemon is running
+		if !ensureDaemonRunning() {
+			t.Skip("Daemon not available")
+			return
+		}
 
-	// Create HTTP request with fuzzed data
-	req, err := http.NewRequestWithContext(ctx, "POST", "http://localhost:60000/ipp/print", bytes.NewReader(data))
-	if err != nil {
-		return 0
-	}
+		// Try to send HTTP request to ipp-usb
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 
-	req.Header.Set("Content-Type", "application/ipp")
-	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(data)))
+		// Create HTTP request with fuzzed data
+		req, err := http.NewRequestWithContext(ctx, "POST", "http://localhost:60000/ipp/print", bytes.NewReader(data))
+		if err != nil {
+			return
+		}
 
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-	}
+		req.Header.Set("Content-Type", "application/ipp")
+		req.Header.Set("Content-Length", fmt.Sprintf("%d", len(data)))
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0
-	}
-	defer resp.Body.Close()
+		client := &http.Client{
+			Timeout: 5 * time.Second,
+		}
 
-	// Read response to trigger processing
-	io.Copy(io.Discard, resp.Body)
+		resp, err := client.Do(req)
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
 
-	return 1
+		// Read response to trigger processing
+		io.Copy(io.Discard, resp.Body)
+	})
 }
 
 // FuzzIPPMessage fuzzes IPP message parsing
-func FuzzIPPMessage(data []byte) int {
-	if len(data) < 8 {
-		return 0
-	}
+func FuzzIPPMessage(f *testing.F) {
+	// Add seed inputs
+	f.Add([]byte{0x01, 0x01, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x01})
+	f.Add([]byte{0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 
-	// Ensure daemon is running
-	if !ensureDaemonRunning() {
-		return 0
-	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) < 8 {
+			return
+		}
 
-	// Send raw IPP data
-	conn, err := net.DialTimeout("tcp", "localhost:60000", 5*time.Second)
-	if err != nil {
-		return 0
-	}
-	defer conn.Close()
+		// Ensure daemon is running
+		if !ensureDaemonRunning() {
+			t.Skip("Daemon not available")
+			return
+		}
 
-	// Set timeouts
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+		// Send raw IPP data
+		conn, err := net.DialTimeout("tcp", "localhost:60000", 5*time.Second)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
 
-	// Send fuzzed IPP data
-	_, err = conn.Write(data)
-	if err != nil {
-		return 0
-	}
+		// Set timeouts
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	// Read response
-	buffer := make([]byte, 4096)
-	conn.Read(buffer)
+		// Send fuzzed IPP data
+		_, err = conn.Write(data)
+		if err != nil {
+			return
+		}
 
-	return 1
+		// Read response
+		buffer := make([]byte, 4096)
+		conn.Read(buffer)
+	})
 }
 
 // FuzzUSBDescriptor fuzzes USB descriptor handling
-func FuzzUSBDescriptor(data []byte) int {
-	if len(data) < 18 { // Minimum USB descriptor size
-		return 0
-	}
+func FuzzUSBDescriptor(f *testing.F) {
+	// Add seed USB descriptors
+	f.Add([]byte{0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40, 0x6B, 0x1D, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01})
+	f.Add([]byte{0x09, 0x02, 0x20, 0x00, 0x01, 0x01, 0x00, 0x80, 0x32})
 
-	// This would require integration with the USBIP virtual device
-	// For now, we'll simulate descriptor processing
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) < 18 { // Minimum USB descriptor size
+			return
+		}
 
-	// Ensure proxy is running
-	if !ensureProxyRunning() {
-		return 0
-	}
+		// This would require integration with the USBIP virtual device
+		// For now, we'll simulate descriptor processing
 
-	// In a real implementation, this would feed the descriptor data
-	// to the USBIP virtual device simulation
-	return processUSBDescriptor(data)
+		// Ensure proxy is running
+		if !ensureProxyRunning() {
+			t.Skip("Proxy not available")
+			return
+		}
+
+		// In a real implementation, this would feed the descriptor data
+		// to the USBIP virtual device simulation
+		processUSBDescriptor(data)
+	})
 }
 
 func ensureDaemonRunning() bool {
