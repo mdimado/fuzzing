@@ -1,32 +1,45 @@
 #!/bin/bash -eu
 
 # OSS-Fuzz build script for ipp-usb
-cd $SRC/fuzzing/projects/ipp-usb
+cd $SRC/ipp-usb
 
 echo "Building ipp-usb fuzzers..."
 
-# Build the main HTTP fuzzer
-go-fuzz-build -libfuzzer -func FuzzHTTPInterface -o fuzz_ipp_usb_http.a ./fuzzer
-$CXX $CXXFLAGS $LIB_FUZZING_ENGINE fuzz_ipp_usb_http.a -o $OUT/fuzz_ipp_usb_http
+# Compile fuzzers using Go's built-in fuzzing support for libFuzzer
+# This creates libFuzzer-compatible binaries from Go fuzz functions
 
-# Build the IPP message fuzzer
-go-fuzz-build -libfuzzer -func FuzzIPPMessage -o fuzz_ipp_usb_message.a ./fuzzer  
-$CXX $CXXFLAGS $LIB_FUZZING_ENGINE fuzz_ipp_usb_message.a -o $OUT/fuzz_ipp_usb_message
+# Build the main HTTP fuzzer
+compile_native_go_fuzzer github.com/OpenPrinting/ipp-usb/fuzzer FuzzHTTPInterface fuzz_ipp_usb_http
+
+# Build the IPP message fuzzer  
+compile_native_go_fuzzer github.com/OpenPrinting/ipp-usb/fuzzer FuzzIPPMessage fuzz_ipp_usb_message
 
 # Build the USB descriptor fuzzer
-go-fuzz-build -libfuzzer -func FuzzUSBDescriptor -o fuzz_ipp_usb_descriptor.a ./fuzzer
-$CXX $CXXFLAGS $LIB_FUZZING_ENGINE fuzz_ipp_usb_descriptor.a -o $OUT/fuzz_ipp_usb_descriptor
+compile_native_go_fuzzer github.com/OpenPrinting/ipp-usb/fuzzer FuzzUSBDescriptor fuzz_ipp_usb_descriptor
 
-# Copy seed corpora
+# Copy seed corpora if they exist
 echo "Copying seed corpora..."
-cp -r seeds/fuzz_ipp_usb_http_seed_corpus $OUT/
-cp -r seeds/fuzz_ipp_usb_message_seed_corpus $OUT/
-cp -r seeds/fuzz_ipp_usb_descriptor_seed_corpus $OUT/
+if [ -d "fuzzer/seeds" ]; then
+    if [ -d "fuzzer/seeds/fuzz_ipp_usb_http_seed_corpus" ]; then
+        cp -r fuzzer/seeds/fuzz_ipp_usb_http_seed_corpus $OUT/
+    fi
+    if [ -d "fuzzer/seeds/fuzz_ipp_usb_message_seed_corpus" ]; then
+        cp -r fuzzer/seeds/fuzz_ipp_usb_message_seed_corpus $OUT/
+    fi
+    if [ -d "fuzzer/seeds/fuzz_ipp_usb_descriptor_seed_corpus" ]; then
+        cp -r fuzzer/seeds/fuzz_ipp_usb_descriptor_seed_corpus $OUT/
+    fi
+fi
 
-# Copy auxiliary files
+# Copy auxiliary files if they exist
 echo "Copying auxiliary files..."
-cp setup_environment.sh $OUT/
-cp cleanup.sh $OUT/
-chmod +x $OUT/setup_environment.sh $OUT/cleanup.sh
+if [ -f "fuzzer/setup_environment.sh" ]; then
+    cp fuzzer/setup_environment.sh $OUT/
+    chmod +x $OUT/setup_environment.sh
+fi
+if [ -f "fuzzer/cleanup.sh" ]; then
+    cp fuzzer/cleanup.sh $OUT/
+    chmod +x $OUT/cleanup.sh
+fi
 
 echo "ipp-usb fuzzers built successfully"
