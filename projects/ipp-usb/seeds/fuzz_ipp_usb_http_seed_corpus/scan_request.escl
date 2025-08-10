@@ -1,0 +1,3 @@
+<ScanRequest xmlns="http://schemas.hp.com/imaging/escl/2011/05/03">
+  <Version>2.0</Version>
+</ScanRequest>
