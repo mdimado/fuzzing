@@ -1,26 +1,55 @@
 #!/bin/bash -eu
 
-# OSS-Fuzz build script for ipp-usb  
+set -x
+
+# Create a Go module in ipp-usb for the fuzzer
 cd $SRC/ipp-usb
 
-echo "Building ipp-usb fuzzers..."
-
-# Use readonly mode to respect existing vendor directory
-export GOFLAGS="-mod=readonly"
-
-# Find the correct fuzzer path
-if [ -d "./fuzzer" ]; then
-    FUZZER_PATH="./fuzzer"
-elif [ -d "/src/fuzzing/projects/ipp-usb/fuzzer" ]; then
-    FUZZER_PATH="/src/fuzzing/projects/ipp-usb/fuzzer"
-else
-    # Put fuzzer in current directory
-    FUZZER_PATH="."
+# Initialize go.mod if it doesn't exist or add necessary dependencies
+if ! grep -q "github.com/OpenPrinting/go-mfp" go.mod 2>/dev/null; then
+    # Add go-mfp as a local dependency
+    go mod edit -replace=github.com/OpenPrinting/go-mfp=$SRC/go-mfp
 fi
 
-# Build fuzzers using compile_native_go_fuzzer
-compile_native_go_fuzzer $FUZZER_PATH FuzzHTTPInterface fuzz_ipp_usb_http
-compile_native_go_fuzzer $FUZZER_PATH FuzzIPPMessage fuzz_ipp_usb_message
-compile_native_go_fuzzer $FUZZER_PATH FuzzUSBDescriptor fuzz_ipp_usb_descriptor
+# Copy fuzzer source files
+cp $SRC/fuzzing/projects/ipp-usb/fuzzer/*.go $SRC/ipp-usb/
+cp $SRC/fuzzing/projects/ipp-usb/fuzzer/setup_env.sh $SRC/
 
-echo "ipp-usb fuzzers built successfully"
+# Generate seed corpus if generation script exists
+if [ -f "$SRC/ipp-usb/seed_generation.go" ]; then
+    cd $SRC/ipp-usb
+    go run seed_generation.go
+fi
+
+# Make setup script executable
+chmod +x $SRC/setup_env.sh
+
+# Build go-mfp proxy (still useful for reference/backup)
+cd $SRC/go-mfp
+export CC=$SRC/go-mfp/build/bin/clang
+export CXX=$SRC/go-mfp/build/bin/clang++
+export CFLAGS="$CFLAGS -fsanitize=fuzzer-no-link"
+export CXXFLAGS="$CXXFLAGS -fsanitize=fuzzer-no-link"
+make
+
+# Build ipp-usb binary for the fuzzer to use
+cd $SRC/ipp-usb
+export CGO_ENABLED=1
+
+# Ensure go-mfp dependencies are available
+go mod tidy || true
+go mod download || true
+
+# Build standalone ipp-usb binary
+go build -o ipp-usb .
+
+# Compile the USBIP data injection fuzzer
+compile_go_fuzzer . FuzzUSBIPData fuzz_usbip_data
+
+# Copy seed corpus
+cp -r $SRC/fuzzing/projects/ipp-usb/seeds/* $OUT/
+
+# Copy the setup script, binaries to output
+cp $SRC/setup_env.sh $OUT/
+cp $SRC/go-mfp/cmd/mfp-proxy/mfp-proxy $OUT/ || true
+cp $SRC/ipp-usb/ipp-usb $OUT/
