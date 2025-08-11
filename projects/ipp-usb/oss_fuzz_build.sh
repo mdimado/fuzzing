@@ -9,7 +9,7 @@ go build -o $OUT/mfp-proxy ./cmd/mfp-proxy
 cd $SRC/ipp-usb
 make clean
 # Add pkg-config flags to link Avahi libraries statically if possible
-export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"
+export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
 make LDFLAGS="-static-libgcc -L/usr/lib/x86_64-linux-gnu" CFLAGS="-O2"
 cp ipp-usb $OUT/
 
