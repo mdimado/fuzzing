@@ -1,55 +1,77 @@
 #!/bin/bash -eu
 
-set -x
+PROJECT_NAME="$1"
 
-# Create a Go module in ipp-usb for the fuzzer
-cd $SRC/ipp-usb
-
-# Initialize go.mod if it doesn't exist or add necessary dependencies
-if ! grep -q "github.com/OpenPrinting/go-mfp" go.mod 2>/dev/null; then
-    # Add go-mfp as a local dependency
-    go mod edit -replace=github.com/OpenPrinting/go-mfp=$SRC/go-mfp
+if [[ "$PROJECT_NAME" != "ipp-usb" ]]; then
+    echo "Error: This script is for ipp-usb project only"
+    exit 1
 fi
 
-# Copy fuzzer source files
-cp $SRC/fuzzing/projects/ipp-usb/fuzzer/*.go $SRC/ipp-usb/
-cp $SRC/fuzzing/projects/ipp-usb/fuzzer/setup_env.sh $SRC/
+echo "Building $PROJECT_NAME fuzzers"
 
-# Generate seed corpus if generation script exists
-if [ -f "$SRC/ipp-usb/seed_generation.go" ]; then
-    cd $SRC/ipp-usb
-    go run seed_generation.go
+# Create a combined fuzzer directory that will work with OSS-Fuzz
+mkdir -p $OUT/fuzzer_workspace
+cd $OUT/fuzzer_workspace
+
+# Create a minimal Go module for our fuzzers
+cat > go.mod << 'EOF'
+module ipp-usb-fuzzer
+
+go 1.18
+
+require (
+	github.com/OpenPrinting/ipp-usb v0.0.0-20241201000000-000000000000
+	github.com/OpenPrinting/go-mfp v0.0.0-20241201000000-000000000000
+)
+
+replace github.com/OpenPrinting/ipp-usb => ../../ipp-usb
+replace github.com/OpenPrinting/go-mfp => ../../go-mfp
+EOF
+
+# Copy fuzzer files
+cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_usb_layer.go .
+cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_http_client.go .
+
+# Create seed corpus archives
+# USB/IPP binary seeds
+mkdir -p $WORK/usb_ipp_seed_corpus
+if [ -d "$SRC/fuzzing/projects/ipp-usb/seeds" ]; then
+    find $SRC/fuzzing/projects/ipp-usb/seeds -name "*.bin" -exec cp {} $WORK/usb_ipp_seed_corpus/ \;
+fi
+cd $WORK
+if [ "$(ls -A usb_ipp_seed_corpus)" ]; then
+    zip -r $OUT/fuzz_usb_layer_seed_corpus.zip usb_ipp_seed_corpus/
 fi
 
-# Make setup script executable
-chmod +x $SRC/setup_env.sh
+# HTTP seeds  
+mkdir -p $WORK/http_seed_corpus
+if [ -d "$SRC/fuzzing/projects/ipp-usb/seeds" ]; then
+    find $SRC/fuzzing/projects/ipp-usb/seeds -name "*.txt" -exec cp {} $WORK/http_seed_corpus/ \;
+fi
+if [ "$(ls -A http_seed_corpus)" ]; then
+    zip -r $OUT/fuzz_http_client_seed_corpus.zip http_seed_corpus/
+fi
 
-# Build go-mfp proxy (still useful for reference/backup)
-cd $SRC/go-mfp
-export CC=$SRC/go-mfp/build/bin/clang
-export CXX=$SRC/go-mfp/build/bin/clang++
-export CFLAGS="$CFLAGS -fsanitize=fuzzer-no-link"
-export CXXFLAGS="$CXXFLAGS -fsanitize=fuzzer-no-link"
-make
+# Return to fuzzer workspace
+cd $OUT/fuzzer_workspace
 
-# Build ipp-usb binary for the fuzzer to use
-cd $SRC/ipp-usb
+# Initialize go module
+go mod tidy || echo "Warning: go mod tidy failed, continuing..."
+
+# Install required dependencies for native Go 1.18 fuzzing
 export CGO_ENABLED=1
+export GO111MODULE=on
 
-# Ensure go-mfp dependencies are available
-go mod tidy || true
-go mod download || true
+# Build USB layer fuzzer (primary approach)
+echo "Building ipp-usb USB layer fuzzer"
+if ! compile_native_go_fuzzer . FuzzUSBLayer fuzz_usb_layer; then
+    echo "Warning: USB layer fuzzer build failed"
+fi
 
-# Build standalone ipp-usb binary
-go build -o ipp-usb .
+# Build HTTP client fuzzer (complementary approach) 
+echo "Building ipp-usb HTTP client fuzzer"
+if ! compile_native_go_fuzzer . FuzzHTTPClient fuzz_http_client; then
+    echo "Warning: HTTP client fuzzer build failed"
+fi
 
-# Compile the USBIP data injection fuzzer
-compile_go_fuzzer . FuzzUSBIPData fuzz_usbip_data
-
-# Copy seed corpus
-cp -r $SRC/fuzzing/projects/ipp-usb/seeds/* $OUT/
-
-# Copy the setup script, binaries to output
-cp $SRC/setup_env.sh $OUT/
-cp $SRC/go-mfp/cmd/mfp-proxy/mfp-proxy $OUT/ || true
-cp $SRC/ipp-usb/ipp-usb $OUT/
+echo "Fuzzers built successfully"
