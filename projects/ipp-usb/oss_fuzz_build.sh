@@ -7,8 +7,10 @@ go build -o $OUT/mfp-proxy ./cmd/mfp-proxy
 
 # Build ipp-usb binary (required for fuzzing)
 cd $SRC/ipp-usb
-make
+make clean
+make LDFLAGS="-static" CFLAGS="-O2 -static"
 cp ipp-usb $OUT/
+
 
 mkdir -p $SRC/ipp-usb/fuzzer
 cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_usb_device.go $SRC/ipp-usb/fuzzer/
