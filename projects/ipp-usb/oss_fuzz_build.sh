@@ -1,58 +1,18 @@
 #!/bin/bash -eu
 
-# Clone and build go-mfp (provides mfp-proxy and USB/IP endpoints)
-# git clone https://github.com/OpenPrinting/go-mfp.git $SRC/go-mfp
-cd $SRC/go-mfp
-go build -o $OUT/mfp-proxy ./cmd/mfp-proxy
-
-# Build ipp-usb binary (required for fuzzing)
+# Build ipp-usb binary first (required for fuzzing)
 cd $SRC/ipp-usb
-make clean
-# Add pkg-config flags to link Avahi libraries statically if possible
-export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
-make LDFLAGS="-static-libgcc -L/usr/lib/x86_64-linux-gnu" CFLAGS="-O2"
+make
 cp ipp-usb $OUT/
 
-# Create a wrapper script that sets LD_LIBRARY_PATH
-cat > $OUT/ipp-usb-wrapper << 'EOF'
-#!/bin/bash
-export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
-# Debug: check if libraries exist
-echo "DEBUG: Checking for Avahi libraries..."
-ls -la /usr/lib/x86_64-linux-gnu/libavahi* || echo "No Avahi libs found in /usr/lib/x86_64-linux-gnu/"
-find /usr -name "libavahi-common.so*" 2>/dev/null || echo "libavahi-common.so not found anywhere"
-echo "DEBUG: LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-echo "DEBUG: Executing: /out/ipp-usb $@"
-exec /out/ipp-usb "$@"
-EOF
-chmod +x $OUT/ipp-usb-wrapper
-
-# Copy required Avahi libraries to output directory
-mkdir -p $OUT/lib
-cp -L /usr/lib/x86_64-linux-gnu/libavahi-common.so.3* $OUT/lib/ || echo "Warning: Could not copy libavahi-common"
-cp -L /usr/lib/x86_64-linux-gnu/libavahi-client.so.3* $OUT/lib/ || echo "Warning: Could not copy libavahi-client"
-cp -L /usr/lib/x86_64-linux-gnu/libusb-1.0.so.0* $OUT/lib/ || echo "Warning: Could not copy libusb-1.0"
-cp -L /lib/x86_64-linux-gnu/libudev.so.1* $OUT/lib/ || echo "Warning: Could not copy libudev"
-
-# Copy any additional dependencies that might be needed
-ldd /src/ipp-usb/ipp-usb | grep "=> /" | awk '{print $3}' | xargs -I {} cp {} $OUT/lib/ 2>/dev/null || echo "Some libraries could not be copied"
-
-# Update wrapper to use local libraries
-cat > $OUT/ipp-usb-wrapper << 'EOF'
-#!/bin/bash
-export LD_LIBRARY_PATH="/out/lib:${LD_LIBRARY_PATH:-}"
-# Debug: check if libraries exist
-echo "DEBUG: Checking for required libraries..."
-ls -la /out/lib/ || echo "No libs found in /out/lib/"
-echo "DEBUG: LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-echo "DEBUG: Executing: /out/ipp-usb $@"
-exec /out/ipp-usb "$@"
-EOF
-chmod +x $OUT/ipp-usb-wrapper
-
 mkdir -p $SRC/ipp-usb/fuzzer
-cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_usb_device.go $SRC/ipp-usb/fuzzer/
-cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_http_client.go $SRC/ipp-usb/fuzzer/
+cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_usb_device_side.go $SRC/ipp-usb/fuzzer/
+cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_http_client_side.go $SRC/ipp-usb/fuzzer/
+
+# Build USB device simulator helper
+cp $SRC/fuzzing/projects/ipp-usb/fuzzer/usb_device_simulator.go $SRC/ipp-usb/fuzzer/
+cd $SRC/ipp-usb/fuzzer
+go build -o $OUT/usb-device-simulator usb_device_simulator.go
 
 # Create seed corpus archives
 # USB/IPP binary seeds
