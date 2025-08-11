@@ -11,8 +11,8 @@ make
 cp ipp-usb $OUT/
 
 mkdir -p $SRC/ipp-usb/fuzzer
-cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_usb_device_side.go $SRC/ipp-usb/fuzzer/
-cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_http_client_side.go $SRC/ipp-usb/fuzzer/
+cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_usb_device.go $SRC/ipp-usb/fuzzer/
+cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_http_client.go $SRC/ipp-usb/fuzzer/
 
 # Create seed corpus archives
 # USB/IPP binary seeds
