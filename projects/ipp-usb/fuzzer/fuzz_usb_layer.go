@@ -1,163 +1,105 @@
 package fuzzer
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"os/exec"
+	"sync"
 	"testing"
 	"time"
 )
 
-// FuzzUSBLayer implements USB layer fuzzing using native Go 1.18 fuzzing
-func FuzzUSBLayer(f *testing.F) {
+// FuzzUSBDeviceSide tests ipp-usb's tolerance to malformed USB device responses
+func FuzzUSBDeviceSide(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
-		// Skip very small inputs to avoid edge cases
-		if len(data) < 10 {
+		// Skip very small inputs
+		if len(data) < 20 {
 			return
 		}
 
-		// Limit maximum data size to prevent resource exhaustion
-		if len(data) > 64*1024 {
-			data = data[:64*1024]
+		// Limit data size to prevent resource exhaustion
+		if len(data) > 32*1024 {
+			data = data[:32*1024]
 		}
 
-		// Create a short timeout to prevent hangs
-		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		// Create timeout context
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		// Test the fuzzer with controlled timeout
-		testUSBProtocol(ctx, data)
+		// Test with controlled environment
+		testUSBDeviceFuzzing(ctx, t, data)
 	})
 }
 
-func testUSBProtocol(ctx context.Context, fuzzData []byte) {
-	defer func() {
-		if r := recover(); r != nil {
-			// Silently handle panics to prevent test crashes
-		}
-	}()
+func testUSBDeviceFuzzing(ctx context.Context, t *testing.T, fuzzData []byte) {
+	// Create virtual USB device that will send fuzzed responses
+	device := NewVirtualUSBDevice(fuzzData)
 
-	server := NewMockUSBIPServer(fuzzData)
+	// Create a cancelable context for this function
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	// Use ephemeral port to avoid conflicts
+	// Start USB/IP server for the virtual device
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
+		t.Skip("Cannot create listener:", err)
 		return
 	}
 	defer listener.Close()
 
 	port := listener.Addr().(*net.TCPAddr).Port
 
-	// Start server with proper cancellation
-	serverDone := make(chan struct{})
+	// Start the virtual device server
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
-		defer close(serverDone)
-		server.Serve(ctx, listener)
+		defer wg.Done()
+		device.Serve(ctx, listener)
 	}()
 
-	// Give server minimal time to start
-	select {
-	case <-time.After(10 * time.Millisecond):
-	case <-ctx.Done():
+	// Give the server time to start
+	time.Sleep(50 * time.Millisecond)
+
+	// Start ipp-usb daemon pointing to our virtual device
+	ippusbCmd := startIPPUSBDaemon(ctx, t, port)
+	if ippusbCmd == nil {
+		cancel()
+		wg.Wait()
 		return
 	}
+	defer ippusbCmd.Process.Kill()
 
-	// Test client interaction with timeout
-	testClientInteraction(ctx, port, fuzzData)
+	// Give ipp-usb time to discover and connect to our virtual device
+	time.Sleep(2 * time.Second)
 
-	// Wait for server to finish or timeout
-	select {
-	case <-serverDone:
-	case <-ctx.Done():
-	}
+	// Send test HTTP requests to ipp-usb to trigger USB communication
+	testHTTPRequests(ctx, t)
+
+	// Cleanup
+	cancel()
+	wg.Wait()
 }
 
-func testClientInteraction(ctx context.Context, port int, data []byte) {
-	defer func() {
-		if r := recover(); r != nil {
-			// Silently handle client panics
-		}
-	}()
-
-	// Create connection with short timeout
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 100*time.Millisecond)
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-
-	// Set overall deadline for all operations
-	deadline := time.Now().Add(200 * time.Millisecond)
-	conn.SetDeadline(deadline)
-
-	// Send device list request
-	devlistReq := []byte{0x01, 0x11, 0x80, 0x05, 0x00, 0x00, 0x00, 0x00}
-	conn.Write(devlistReq)
-
-	// Try to read response with short timeout
-	buffer := make([]byte, 512)
-	n, err := conn.Read(buffer)
-	if err != nil || n == 0 {
-		return
-	}
-
-	// Send import request
-	importReq := make([]byte, 40)
-	importReq[0], importReq[1] = 0x01, 0x11
-	importReq[2], importReq[3] = 0x80, 0x03
-	copy(importReq[8:], []byte("1-1"))
-	conn.Write(importReq)
-
-	// Read import response
-	conn.Read(buffer)
-
-	// Send one simple bulk transfer
-	bulkReq := createSimpleBulkRequest(data)
-	conn.Write(bulkReq)
-
-	// Read final response
-	conn.Read(buffer)
-}
-
-func createSimpleBulkRequest(data []byte) []byte {
-	// Limit data size for bulk request
-	maxSize := 256
-	if len(data) > maxSize {
-		data = data[:maxSize]
-	}
-
-	req := make([]byte, 48+len(data))
-	// USBIP_CMD_SUBMIT
-	req[3] = 0x01
-	// Sequence number
-	req[7] = 0x01
-	// Endpoint
-	req[8] = 0x02
-	// Transfer length
-	dataLen := len(data)
-	req[16] = byte(dataLen >> 24)
-	req[17] = byte(dataLen >> 16)
-	req[18] = byte(dataLen >> 8)
-	req[19] = byte(dataLen)
-
-	// Copy data
-	copy(req[48:], data)
-	return req
-}
-
-// MockUSBIPServer - Simplified, robust implementation
-type MockUSBIPServer struct {
+// VirtualUSBDevice simulates a USB printer that responds with fuzzed data
+type VirtualUSBDevice struct {
 	fuzzData []byte
+	mu       sync.Mutex
 }
 
-func NewMockUSBIPServer(fuzzData []byte) *MockUSBIPServer {
-	return &MockUSBIPServer{fuzzData: fuzzData}
+func NewVirtualUSBDevice(fuzzData []byte) *VirtualUSBDevice {
+	return &VirtualUSBDevice{
+		fuzzData: fuzzData,
+	}
 }
 
-func (s *MockUSBIPServer) Serve(ctx context.Context, listener net.Listener) {
+func (d *VirtualUSBDevice) Serve(ctx context.Context, listener net.Listener) {
 	defer func() {
 		if r := recover(); r != nil {
-			// Handle server panics gracefully
+			// Handle panics gracefully
 		}
 	}()
 
@@ -168,14 +110,8 @@ func (s *MockUSBIPServer) Serve(ctx context.Context, listener net.Listener) {
 		default:
 		}
 
-		// Set accept timeout to prevent blocking
-		if tcpListener, ok := listener.(*net.TCPListener); ok {
-			tcpListener.SetDeadline(time.Now().Add(100 * time.Millisecond))
-		}
-
 		conn, err := listener.Accept()
 		if err != nil {
-			// Check if it's a timeout or context cancellation
 			select {
 			case <-ctx.Done():
 				return
@@ -184,12 +120,11 @@ func (s *MockUSBIPServer) Serve(ctx context.Context, listener net.Listener) {
 			}
 		}
 
-		// Handle connection with timeout
-		go s.handleConnectionSafely(ctx, conn)
+		go d.handleUSBIPConnection(ctx, conn)
 	}
 }
 
-func (s *MockUSBIPServer) handleConnectionSafely(ctx context.Context, conn net.Conn) {
+func (d *VirtualUSBDevice) handleUSBIPConnection(ctx context.Context, conn net.Conn) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Handle connection panics
@@ -197,10 +132,8 @@ func (s *MockUSBIPServer) handleConnectionSafely(ctx context.Context, conn net.C
 		conn.Close()
 	}()
 
-	// Set connection deadline
-	conn.SetDeadline(time.Now().Add(200 * time.Millisecond))
-
-	buffer := make([]byte, 1024)
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	buffer := make([]byte, 4096)
 
 	for {
 		select {
@@ -214,79 +147,96 @@ func (s *MockUSBIPServer) handleConnectionSafely(ctx context.Context, conn net.C
 			return
 		}
 
-		if n >= 4 {
-			s.handleMessage(conn, buffer[:n])
+		if n >= 8 {
+			d.handleUSBIPMessage(conn, buffer[:n])
 		}
 	}
 }
 
-func (s *MockUSBIPServer) handleMessage(conn net.Conn, data []byte) {
+func (d *VirtualUSBDevice) handleUSBIPMessage(conn net.Conn, data []byte) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Handle message processing panics
 		}
 	}()
 
-	if len(data) < 4 {
+	if len(data) < 8 {
 		return
 	}
 
-	// Simple command detection
+	// Parse USB/IP command
 	command := uint16(data[2])<<8 | uint16(data[3])
 
 	switch command {
-	case 0x8005: // Device list request
-		s.sendDeviceListResponse(conn)
-	case 0x8003: // Import request
-		s.sendImportResponse(conn)
-	case 0x0001: // Submit request
-		s.sendSubmitResponse(conn, data)
+	case 0x8005: // OP_REQ_DEVLIST
+		d.sendDeviceList(conn)
+	case 0x8003: // OP_REQ_IMPORT
+		d.sendImportResponse(conn)
+	case 0x0001: // USBIP_CMD_SUBMIT
+		d.sendFuzzedSubmitResponse(conn, data)
+	default:
+		// Send fuzzed response for unknown commands
+		d.sendFuzzedResponse(conn, data)
 	}
 }
 
-func (s *MockUSBIPServer) sendDeviceListResponse(conn net.Conn) {
-	// Minimal device list response
-	response := make([]byte, 320) // Fixed size response
-	response[0], response[1] = 0x01, 0x11
-	response[2], response[3] = 0x80, 0x05
-	response[7] = 0x01 // 1 device
+func (d *VirtualUSBDevice) sendDeviceList(conn net.Conn) {
+	// Send device list with our virtual printer
+	response := make([]byte, 312)
 
-	// Device info
-	copy(response[8:], []byte("1-1"))
+	// USB/IP header
+	response[0], response[1] = 0x01, 0x11 // version
+	response[2], response[3] = 0x80, 0x05 // command
+	response[7] = 0x01                    // number of devices
+
+	// Device entry
+	copy(response[8:], []byte("1-1.4\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"))
 	response[40] = 0x01 // busnum
-	response[41] = 0x01 // devnum
+	response[41] = 0x04 // devnum
+	response[42] = 0x01 // speed
+
+	// Device descriptor with printer class
+	response[44] = 0x12 // bLength
+	response[45] = 0x01 // bDescriptorType
+	response[52] = 0x07 // bDeviceClass (printer)
+	response[54] = 0x03 // bDeviceProtocol (IPP)
 
 	conn.Write(response)
 }
 
-func (s *MockUSBIPServer) sendImportResponse(conn net.Conn) {
-	// Minimal import response
+func (d *VirtualUSBDevice) sendImportResponse(conn net.Conn) {
+	// Send successful import response
 	response := make([]byte, 320)
 	response[0], response[1] = 0x01, 0x11
 	response[2], response[3] = 0x80, 0x03
-	// Status OK (already 0)
+	// Status = 0 (success)
 
 	conn.Write(response)
 }
 
-func (s *MockUSBIPServer) sendSubmitResponse(conn net.Conn, requestData []byte) {
-	// Extract sequence number safely
+func (d *VirtualUSBDevice) sendFuzzedSubmitResponse(conn net.Conn, requestData []byte) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// Extract sequence number from request
 	var seqnum uint32
 	if len(requestData) >= 8 {
 		seqnum = uint32(requestData[4])<<24 | uint32(requestData[5])<<16 |
 			uint32(requestData[6])<<8 | uint32(requestData[7])
 	}
 
-	// Limit fuzz data size in response
-	fuzzDataLen := len(s.fuzzData)
-	if fuzzDataLen > 512 {
-		fuzzDataLen = 512
+	// Create response with fuzzed data
+	maxFuzzLen := 2048
+	fuzzLen := len(d.fuzzData)
+	if fuzzLen > maxFuzzLen {
+		fuzzLen = maxFuzzLen
 	}
 
-	response := make([]byte, 48+fuzzDataLen)
+	response := make([]byte, 48+fuzzLen)
 
-	// USBIP_RET_SUBMIT
-	response[3] = 0x03
+	// USB/IP RET_SUBMIT header
+	response[0], response[1] = 0x01, 0x11 // version
+	response[2], response[3] = 0x00, 0x03 // command USBIP_RET_SUBMIT
 
 	// Echo sequence number
 	response[4] = byte(seqnum >> 24)
@@ -294,17 +244,117 @@ func (s *MockUSBIPServer) sendSubmitResponse(conn net.Conn, requestData []byte) 
 	response[6] = byte(seqnum >> 8)
 	response[7] = byte(seqnum)
 
-	// Status = 0 (success)
-	// Actual length
-	response[24] = byte(fuzzDataLen >> 24)
-	response[25] = byte(fuzzDataLen >> 16)
-	response[26] = byte(fuzzDataLen >> 8)
-	response[27] = byte(fuzzDataLen)
+	// Status (sometimes inject errors based on fuzz data)
+	if len(d.fuzzData) > 0 && d.fuzzData[0]%10 == 0 {
+		response[8] = 0xFF // Inject USB error occasionally
+	}
 
-	// Copy limited fuzz data
-	if fuzzDataLen > 0 && len(s.fuzzData) > 0 {
-		copy(response[48:], s.fuzzData[:fuzzDataLen])
+	// Actual length
+	response[24] = byte(fuzzLen >> 24)
+	response[25] = byte(fuzzLen >> 16)
+	response[26] = byte(fuzzLen >> 8)
+	response[27] = byte(fuzzLen)
+
+	// Copy fuzzed payload
+	if fuzzLen > 0 {
+		copy(response[48:], d.fuzzData[:fuzzLen])
 	}
 
 	conn.Write(response)
+}
+
+func (d *VirtualUSBDevice) sendFuzzedResponse(conn net.Conn, requestData []byte) {
+	// Send completely fuzzed response for unknown messages
+	d.mu.Lock()
+	fuzzData := d.fuzzData
+	d.mu.Unlock()
+
+	maxLen := 1024
+	respLen := len(fuzzData)
+	if respLen > maxLen {
+		respLen = maxLen
+	}
+
+	if respLen > 0 {
+		conn.Write(fuzzData[:respLen])
+	}
+}
+
+func startIPPUSBDaemon(ctx context.Context, t *testing.T, usbipPort int) *exec.Cmd {
+	// Try to start ipp-usb daemon
+	// This assumes ipp-usb is installed and available in PATH
+	cmd := exec.CommandContext(ctx, "ipp-usb",
+		"-verbose",
+		"-debug",
+		fmt.Sprintf("-usbip-port=%d", usbipPort))
+
+	err := cmd.Start()
+	if err != nil {
+		t.Skip("Cannot start ipp-usb daemon (not installed?):", err)
+		return nil
+	}
+
+	return cmd
+}
+
+func testHTTPRequests(ctx context.Context, t *testing.T) {
+	// Send some basic IPP requests to ipp-usb to trigger USB communication
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	// Try to find ipp-usb HTTP endpoint (usually on port 60000+)
+	testPorts := []int{60000, 60001, 60002}
+
+	for _, port := range testPorts {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		url := fmt.Sprintf("http://127.0.0.1:%d/ipp/print", port)
+
+		// Create a simple IPP Get-Printer-Attributes request
+		ippRequest := []byte{
+			0x02, 0x00, // IPP version 2.0
+			0x00, 0x0B, // Get-Printer-Attributes operation
+			0x00, 0x00, 0x00, 0x01, // request-id
+			0x01,             // begin-attribute-group-tag
+			0x47, 0x00, 0x12, // charset attribute
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(ippRequest))
+		if err != nil {
+			continue
+		}
+		req.Header.Set("Content-Type", "application/ipp")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue // Try next port
+		}
+
+		// Read and discard response
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+
+		// Found working port, send a few more requests
+		for i := 0; i < 3; i++ {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			req2, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(ippRequest))
+			req2.Header.Set("Content-Type", "application/ipp")
+
+			resp2, err := client.Do(req2)
+			if err != nil {
+				break
+			}
+			io.Copy(io.Discard, resp2.Body)
+			resp2.Body.Close()
+		}
+		break
+	}
 }

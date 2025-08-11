@@ -6,90 +6,429 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
 
-// FuzzHTTPClient implements HTTP client-side fuzzing using native Go 1.18 fuzzing
-// Tests ipp-usb's tolerance to malformed HTTP clients
-func FuzzHTTPClient(f *testing.F) {
-	// Note: f.Add() won't work for OSS-Fuzz as per documentation
-	// Seeds are provided via seed corpus zip files instead
-	
+// FuzzHTTPClientSide tests ipp-usb's tolerance to malformed HTTP client requests
+func FuzzHTTPClientSide(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
-		if len(data) < 5 {
+		// Skip very small inputs
+		if len(data) < 10 {
 			return
 		}
 
-		// Create a mock HTTP server that simulates a real printer
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Simulate printer responses
-			w.Header().Set("Content-Type", "application/ipp")
-			w.WriteHeader(200)
-			
-			// Return some basic IPP response
-			ippResponse := []byte{
-				0x01, 0x01, // IPP version
-				0x00, 0x00, // Status: successful-ok
-				0x00, 0x00, 0x00, 0x01, // Request ID
-			}
-			w.Write(ippResponse)
-		}))
-		defer server.Close()
+		// Limit data size
+		if len(data) > 64*1024 {
+			data = data[:64*1024]
+		}
 
-		// Create malformed HTTP requests to test ipp-usb's client tolerance
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		// Test various malformed requests
-		testCases := []struct {
-			method      string
-			path        string
-			body        []byte
-			contentType string
-		}{
-			{"POST", "/ipp/print", data, "application/ipp"},
-			{"GET", "/", data, "text/plain"},
-			{"POST", "/ipp/scan", data[:min(len(data)/2, len(data))], "application/ipp"},
-			{"PUT", "/admin", data, "application/json"},
-			{"DELETE", "/jobs/1", nil, ""},
-		}
-
-		client := &http.Client{Timeout: 500 * time.Millisecond}
-
-		for _, tc := range testCases {
-			var body io.Reader
-			if tc.body != nil {
-				body = bytes.NewReader(tc.body)
-			}
-
-			req, err := http.NewRequestWithContext(ctx, tc.method, server.URL+tc.path, body)
-			if err != nil {
-				continue
-			}
-
-			if tc.contentType != "" {
-				req.Header.Set("Content-Type", tc.contentType)
-			}
-
-			// Add malformed headers using fuzz data
-			if len(data) > 10 {
-				headerName := fmt.Sprintf("X-Fuzz-%x", data[:4])
-				headerValue := string(data[4:min(14, len(data))])
-				req.Header.Set(headerName, headerValue)
-			}
-
-			resp, err := client.Do(req)
-			if err != nil {
-				continue
-			}
-			
-			// Read and discard response
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-		}
+		testHTTPClientFuzzing(ctx, t, data)
 	})
+}
+
+func testHTTPClientFuzzing(ctx context.Context, t *testing.T, fuzzData []byte) {
+	// Start a stable USB device simulator (could be mfp-proxy or simple mock)
+	deviceSim := startUSBDeviceSimulator(ctx, t)
+	if deviceSim == nil {
+		return
+	}
+	defer deviceSim.Process.Kill()
+
+	// Give device time to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Start ipp-usb daemon
+	ippusbCmd := startIPPUSBForClientTesting(ctx, t)
+	if ippusbCmd == nil {
+		return
+	}
+	defer ippusbCmd.Process.Kill()
+
+	// Give ipp-usb time to start and discover devices
+	time.Sleep(3 * time.Second)
+
+	// Find ipp-usb HTTP endpoint
+	endpoint := findIPPUSBEndpoint(ctx)
+	if endpoint == "" {
+		t.Skip("Cannot find ipp-usb HTTP endpoint")
+		return
+	}
+
+	// Send fuzzed HTTP requests
+	sendFuzzedHTTPRequests(ctx, t, endpoint, fuzzData)
+}
+
+func startUSBDeviceSimulator(ctx context.Context, t *testing.T) *exec.Cmd {
+	// Try to start mfp-proxy as a stable device backend
+	// This assumes mfp-proxy is available
+	cmd := exec.CommandContext(ctx, "mfp-proxy", "-device=virtual-printer")
+	err := cmd.Start()
+	if err != nil {
+		// Fallback: start our own simple device simulator
+		return startSimpleDeviceSimulator(ctx, t)
+	}
+	return cmd
+}
+
+func startSimpleDeviceSimulator(ctx context.Context, t *testing.T) *exec.Cmd {
+	// Create a simple stable USB device that responds predictably
+	// This would need to be implemented as a separate helper program
+	// For now, we'll skip if mfp-proxy is not available
+	t.Skip("USB device simulator not available")
+	return nil
+}
+
+func startIPPUSBForClientTesting(ctx context.Context, t *testing.T) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "ipp-usb", "-verbose")
+	err := cmd.Start()
+	if err != nil {
+		t.Skip("Cannot start ipp-usb:", err)
+		return nil
+	}
+	return cmd
+}
+
+func findIPPUSBEndpoint(ctx context.Context) string {
+	// ipp-usb typically listens on ports 60000+
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+
+	for port := 60000; port <= 60010; port++ {
+		select {
+		case <-ctx.Done():
+			return ""
+		default:
+		}
+
+		url := fmt.Sprintf("http://127.0.0.1:%d", port)
+
+		// Try a simple GET request
+		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		resp.Body.Close()
+
+		// Found a responsive endpoint
+		return url
+	}
+
+	return ""
+}
+
+func sendFuzzedHTTPRequests(ctx context.Context, t *testing.T, endpoint string, fuzzData []byte) {
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+		// Don't follow redirects to catch redirect handling bugs
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// Test various fuzzing scenarios
+	testScenarios := []struct {
+		name string
+		test func(context.Context, *http.Client, string, []byte)
+	}{
+		{"malformed_ipp_requests", testMalformedIPPRequests},
+		{"malformed_headers", testMalformedHeaders},
+		{"oversized_requests", testOversizedRequests},
+		{"invalid_methods", testInvalidMethods},
+		{"malformed_urls", testMalformedURLs},
+		{"content_type_attacks", testContentTypeAttacks},
+		{"chunked_encoding", testChunkedEncoding},
+	}
+
+	for _, scenario := range testScenarios {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// Log panic but continue with other tests
+					t.Logf("Panic in scenario %s: %v", scenario.name, r)
+				}
+			}()
+
+			scenario.test(ctx, client, endpoint, fuzzData)
+		}()
+	}
+}
+
+func testMalformedIPPRequests(ctx context.Context, client *http.Client, endpoint string, fuzzData []byte) {
+	paths := []string{"/ipp/print", "/ipp/scan", "/"}
+
+	for _, path := range paths {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		url := endpoint + path
+
+		// Create IPP request with fuzzed data
+		ippHeader := []byte{
+			0x02, 0x00, // IPP version
+			0x00, 0x0B, // operation (Get-Printer-Attributes)
+			0x00, 0x00, 0x00, 0x01, // request-id
+		}
+
+		// Combine header with fuzzed data
+		requestBody := append(ippHeader, fuzzData...)
+		if len(requestBody) > 32*1024 {
+			requestBody = requestBody[:32*1024]
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(requestBody))
+		if err != nil {
+			continue
+		}
+
+		req.Header.Set("Content-Type", "application/ipp")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue // Expected for some malformed requests
+		}
+
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+}
+
+func testMalformedHeaders(ctx context.Context, client *http.Client, endpoint string, fuzzData []byte) {
+	url := endpoint + "/ipp/print"
+
+	// Basic IPP request body
+	basicIPP := []byte{0x02, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x01}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(basicIPP))
+	if err != nil {
+		return
+	}
+
+	// Add fuzzed headers
+	if len(fuzzData) > 10 {
+		// Create potentially problematic header names and values
+		headerName := createFuzzedHeaderName(fuzzData[:5])
+		headerValue := createFuzzedHeaderValue(fuzzData[5:])
+
+		req.Header.Set(headerName, headerValue)
+	}
+
+	// Add more standard but fuzzed headers
+	if len(fuzzData) > 20 {
+		req.Header.Set("Content-Type", string(fuzzData[10:20]))
+		req.Header.Set("User-Agent", string(fuzzData[15:25]))
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+}
+
+func testOversizedRequests(ctx context.Context, client *http.Client, endpoint string, fuzzData []byte) {
+	url := endpoint + "/ipp/print"
+
+	// Create oversized request body by repeating fuzz data
+	oversizedBody := make([]byte, 0, 1024*1024) // 1MB
+	for len(oversizedBody) < cap(oversizedBody) && len(oversizedBody) < 1024*1024 {
+		remaining := cap(oversizedBody) - len(oversizedBody)
+		if len(fuzzData) <= remaining {
+			oversizedBody = append(oversizedBody, fuzzData...)
+		} else {
+			oversizedBody = append(oversizedBody, fuzzData[:remaining]...)
+			break
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(oversizedBody))
+	if err != nil {
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/ipp")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return // Expected for oversized requests
+	}
+
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+}
+
+func testInvalidMethods(ctx context.Context, client *http.Client, endpoint string, fuzzData []byte) {
+	// Test with invalid HTTP methods
+	invalidMethods := []string{"FUZZ", "INVALID", string(fuzzData[:min(10, len(fuzzData))])}
+
+	for _, method := range invalidMethods {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		// Clean method to avoid non-printable chars causing issues
+		cleanMethod := strings.Map(func(r rune) rune {
+			if r >= 32 && r <= 126 { // printable ASCII
+				return r
+			}
+			return -1 // remove non-printable
+		}, method)
+
+		if cleanMethod == "" {
+			continue
+		}
+
+		req, err := http.NewRequestWithContext(ctx, cleanMethod, endpoint, bytes.NewReader(fuzzData))
+		if err != nil {
+			continue
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+}
+
+func testMalformedURLs(ctx context.Context, client *http.Client, endpoint string, fuzzData []byte) {
+	// Create malformed URLs
+	basePaths := []string{"/ipp/print", "/ipp/scan", "/admin"}
+
+	for _, basePath := range basePaths {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		// Add fuzzed query parameters
+		fuzzedPath := basePath + "?" + string(fuzzData[:min(100, len(fuzzData))])
+		url := endpoint + fuzzedPath
+
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			continue // Expected for malformed URLs
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+}
+
+func testContentTypeAttacks(ctx context.Context, client *http.Client, endpoint string, fuzzData []byte) {
+	url := endpoint + "/ipp/print"
+
+	// Test various Content-Type attacks
+	contentTypes := []string{
+		string(fuzzData[:min(50, len(fuzzData))]),
+		"application/ipp; " + string(fuzzData[:min(100, len(fuzzData))]),
+		strings.Repeat("A", 10000),    // Very long content type
+		"application/ipp\x00\x01\x02", // With null bytes
+	}
+
+	for _, ct := range contentTypes {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(fuzzData))
+		if err != nil {
+			continue
+		}
+
+		req.Header.Set("Content-Type", ct)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+}
+
+func testChunkedEncoding(ctx context.Context, client *http.Client, endpoint string, fuzzData []byte) {
+	url := endpoint + "/ipp/print"
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(fuzzData))
+	if err != nil {
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/ipp")
+	req.Header.Set("Transfer-Encoding", "chunked")
+	req.TransferEncoding = []string{"chunked"}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+}
+
+func createFuzzedHeaderName(data []byte) string {
+	// Create potentially problematic header name
+	name := string(data)
+	// Ensure it's not empty and doesn't contain invalid chars that would break HTTP
+	name = strings.Map(func(r rune) rune {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			return r
+		}
+		return 'X' // Replace invalid chars
+	}, name)
+
+	if name == "" {
+		name = "X-Fuzz"
+	}
+	return name
+}
+
+func createFuzzedHeaderValue(data []byte) string {
+	// Create potentially problematic header value
+	value := string(data)
+	// Remove characters that would break HTTP parsing
+	value = strings.Map(func(r rune) rune {
+		if r == '\r' || r == '\n' {
+			return -1 // Remove CR/LF
+		}
+		if r < 32 && r != '\t' {
+			return -1 // Remove control chars except tab
+		}
+		return r
+	}, value)
+
+	return value
 }
 
 func min(a, b int) int {

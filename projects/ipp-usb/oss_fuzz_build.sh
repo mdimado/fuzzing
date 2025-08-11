@@ -1,8 +1,18 @@
 #!/bin/bash -eu
 
+# Clone and build go-mfp (provides mfp-proxy and USB/IP endpoints)
+git clone https://github.com/OpenPrinting/go-mfp.git $SRC/go-mfp
+cd $SRC/go-mfp
+go build -o $OUT/mfp-proxy ./cmd/mfp-proxy
+
+# Build ipp-usb binary (required for fuzzing)
+cd $SRC/ipp-usb
+make
+cp ipp-usb $OUT/
+
 mkdir -p $SRC/ipp-usb/fuzzer
-cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_usb_layer.go $SRC/ipp-usb/fuzzer/
-cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_http_client.go $SRC/ipp-usb/fuzzer/
+cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_usb_device_side.go $SRC/ipp-usb/fuzzer/
+cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_http_client_side.go $SRC/ipp-usb/fuzzer/
 
 # Create seed corpus archives
 # USB/IPP binary seeds
@@ -12,7 +22,7 @@ if [ -d "$SRC/fuzzing/projects/ipp-usb/seeds" ]; then
 fi
 cd $WORK
 if [ "$(ls -A usb_ipp_seed_corpus)" ]; then
-    zip -r $OUT/fuzz_usb_layer_seed_corpus.zip usb_ipp_seed_corpus/
+    zip -r $OUT/fuzz_usb_device_side_seed_corpus.zip usb_ipp_seed_corpus/
 fi
 
 # HTTP seeds  
@@ -21,7 +31,7 @@ if [ -d "$SRC/fuzzing/projects/ipp-usb/seeds" ]; then
     find $SRC/fuzzing/projects/ipp-usb/seeds -name "*.txt" -exec cp {} $WORK/http_seed_corpus/ \;
 fi
 if [ "$(ls -A http_seed_corpus)" ]; then
-    zip -r $OUT/fuzz_http_client_seed_corpus.zip http_seed_corpus/
+    zip -r $OUT/fuzz_http_client_side_seed_corpus.zip http_seed_corpus/
 fi
 
 # build dependencies and fuzzers
@@ -30,5 +40,5 @@ go mod tidy
 go install github.com/AdamKorcz/go-118-fuzz-build@latest
 go get github.com/AdamKorcz/go-118-fuzz-build/testing
 
-compile_native_go_fuzzer ./fuzzer FuzzUSBLayer fuzz_usb_layer
-compile_native_go_fuzzer ./fuzzer FuzzHTTPClient fuzz_http_client
+compile_native_go_fuzzer ./fuzzer FuzzUSBDeviceSide fuzz_usb_device_side
+compile_native_go_fuzzer ./fuzzer FuzzHTTPClientSide fuzz_http_client_side
