@@ -367,14 +367,14 @@ func startIPPUSBDaemon(ctx context.Context, t *testing.T, usbipPort int) *exec.C
 
 	log.Printf("DEBUG: Found ipp-usb at %s", ippusbPath)
 
-	// Try to start ipp-usb daemon - try different argument formats
+	// Try to start ipp-usb daemon - use standalone mode based on documentation
 	var cmd *exec.Cmd
 
-	// First try with usbip-port flag (custom for fuzzing)
-	cmd = exec.CommandContext(ctx, ippusbPath, fmt.Sprintf("-usbip-port=%d", usbipPort))
+	// Use standalone mode which runs forever and automatically discovers devices
+	cmd = exec.CommandContext(ctx, ippusbPath, "standalone")
 
-	// If that doesn't work, we might need to try other approaches
-	// But let's start with this minimal version
+	// Note: The standard ipp-usb doesn't have -usbip-port flag
+	// It will automatically discover USB devices including USB/IP devices
 
 	// Set LD_LIBRARY_PATH in case wrapper script is not used
 	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu")
@@ -387,15 +387,8 @@ func startIPPUSBDaemon(ctx context.Context, t *testing.T, usbipPort int) *exec.C
 	err := cmd.Start()
 	if err != nil {
 		log.Printf("DEBUG: Failed to start ipp-usb: %v", err)
-		// Try without the usbip-port argument as fallback
-		log.Printf("DEBUG: Trying fallback: start ipp-usb without custom arguments")
-		cmd = exec.CommandContext(ctx, ippusbPath)
-		err = cmd.Start()
-		if err != nil {
-			log.Printf("DEBUG: Fallback also failed: %v", err)
-			t.Skip("Cannot start ipp-usb daemon:", err)
-			return nil
-		}
+		t.Skip("Cannot start ipp-usb daemon:", err)
+		return nil
 	}
 
 	log.Printf("DEBUG: ipp-usb daemon started successfully with PID %d", cmd.Process.Pid)
