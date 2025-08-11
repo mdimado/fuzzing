@@ -1,7 +1,7 @@
 #!/bin/bash -eu
 
 # Clone and build go-mfp (provides mfp-proxy and USB/IP endpoints)
-git clone https://github.com/OpenPrinting/go-mfp.git $SRC/go-mfp
+# git clone https://github.com/OpenPrinting/go-mfp.git $SRC/go-mfp
 cd $SRC/go-mfp
 go build -o $OUT/mfp-proxy ./cmd/mfp-proxy
 
