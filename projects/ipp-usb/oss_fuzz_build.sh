@@ -31,15 +31,19 @@ chmod +x $OUT/ipp-usb-wrapper
 mkdir -p $OUT/lib
 cp -L /usr/lib/x86_64-linux-gnu/libavahi-common.so.3* $OUT/lib/ || echo "Warning: Could not copy libavahi-common"
 cp -L /usr/lib/x86_64-linux-gnu/libavahi-client.so.3* $OUT/lib/ || echo "Warning: Could not copy libavahi-client"
+cp -L /usr/lib/x86_64-linux-gnu/libusb-1.0.so.0* $OUT/lib/ || echo "Warning: Could not copy libusb-1.0"
+cp -L /lib/x86_64-linux-gnu/libudev.so.1* $OUT/lib/ || echo "Warning: Could not copy libudev"
+
+# Copy any additional dependencies that might be needed
+ldd /src/ipp-usb/ipp-usb | grep "=> /" | awk '{print $3}' | xargs -I {} cp {} $OUT/lib/ 2>/dev/null || echo "Some libraries could not be copied"
 
 # Update wrapper to use local libraries
 cat > $OUT/ipp-usb-wrapper << 'EOF'
 #!/bin/bash
-export LD_LIBRARY_PATH="/out/lib:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="/out/lib:${LD_LIBRARY_PATH:-}"
 # Debug: check if libraries exist
-echo "DEBUG: Checking for Avahi libraries..."
-ls -la /out/lib/libavahi* || echo "No Avahi libs found in /out/lib/"
-ls -la /usr/lib/x86_64-linux-gnu/libavahi* || echo "No Avahi libs found in /usr/lib/x86_64-linux-gnu/"
+echo "DEBUG: Checking for required libraries..."
+ls -la /out/lib/ || echo "No libs found in /out/lib/"
 echo "DEBUG: LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
 echo "DEBUG: Executing: /out/ipp-usb $@"
 exec /out/ipp-usb "$@"
