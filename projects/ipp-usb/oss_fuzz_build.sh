@@ -1,11 +1,11 @@
 #!/bin/bash -eu
 
-PROJECT_NAME="$1"
+# PROJECT_NAME="$1"
 
-if [[ "$PROJECT_NAME" != "ipp-usb" ]]; then
-    echo "Error: This script is for ipp-usb project only"
-    exit 1
-fi
+# if [[ "$PROJECT_NAME" != "ipp-usb" ]]; then
+#     echo "Error: This script is for ipp-usb project only"
+#     exit 1
+# fi
 
 echo "Building $PROJECT_NAME fuzzers"
 
