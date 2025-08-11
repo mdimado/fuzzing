@@ -27,7 +27,8 @@ fi
 # Build ipp-usb binary first
 cd $SRC/ipp-usb
 go mod tidy
-go build -o ipp-usb ./cmd/ipp-usb
+CGO_ENABLED=1 go build -o ipp-usb .
+
 
 # Build fuzzers
 go install github.com/AdamKorcz/go-118-fuzz-build@latest
