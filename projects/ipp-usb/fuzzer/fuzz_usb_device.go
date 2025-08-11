@@ -347,8 +347,8 @@ func (d *VirtualUSBDevice) sendFuzzedResponse(conn net.Conn, requestData []byte)
 func startIPPUSBDaemon(ctx context.Context, t *testing.T, usbipPort int) *exec.Cmd {
 	log.Printf("DEBUG: Attempting to start ipp-usb daemon on USB/IP port %d", usbipPort)
 
-	// Check if ipp-usb exists in different locations
-	possiblePaths := []string{"ipp-usb", "/out/ipp-usb", "/usr/local/bin/ipp-usb", "/usr/bin/ipp-usb"}
+	// Check if ipp-usb exists in different locations, prefer wrapper script
+	possiblePaths := []string{"/out/ipp-usb-wrapper", "ipp-usb", "/out/ipp-usb", "/usr/local/bin/ipp-usb", "/usr/bin/ipp-usb"}
 	var ippusbPath string
 
 	for _, path := range possiblePaths {
@@ -372,6 +372,9 @@ func startIPPUSBDaemon(ctx context.Context, t *testing.T, usbipPort int) *exec.C
 		"-verbose",
 		"-debug",
 		fmt.Sprintf("-usbip-port=%d", usbipPort))
+
+	// Set LD_LIBRARY_PATH in case wrapper script is not used
+	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu")
 
 	// Capture output for debugging
 	cmd.Stdout = os.Stdout

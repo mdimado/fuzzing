@@ -8,9 +8,18 @@ go build -o $OUT/mfp-proxy ./cmd/mfp-proxy
 # Build ipp-usb binary (required for fuzzing)
 cd $SRC/ipp-usb
 make clean
-make LDFLAGS="-static" CFLAGS="-O2 -static"
+# Add pkg-config flags to link Avahi libraries statically if possible
+export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"
+make LDFLAGS="-static-libgcc -L/usr/lib/x86_64-linux-gnu" CFLAGS="-O2"
 cp ipp-usb $OUT/
 
+# Create a wrapper script that sets LD_LIBRARY_PATH
+cat > $OUT/ipp-usb-wrapper << 'EOF'
+#!/bin/bash
+export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+exec /out/ipp-usb "$@"
+EOF
+chmod +x $OUT/ipp-usb-wrapper
 
 mkdir -p $SRC/ipp-usb/fuzzer
 cp $SRC/fuzzing/projects/ipp-usb/fuzzer/fuzz_usb_device.go $SRC/ipp-usb/fuzzer/
